@@ -318,7 +318,8 @@ export function createTunnelManager({ config = {}, log = () => {} } = {}) {
     return config.natfrp && config.natfrp.token ? config.natfrp.token : null
   }
 
-  async function doStart(provider) {
+  async function doStart(provider, options = {}) {
+    const explicitPort = Number.isInteger(options.port) && options.port > 0 ? options.port : null
     state.stopRequested = false
     state.status = 'starting'
     state.error = null
@@ -352,7 +353,9 @@ export function createTunnelManager({ config = {}, log = () => {} } = {}) {
         url = await spawnAndWait(clientPath, args, { pattern: ANY_URL_RE, provider })
       } else {
         const bin = resolveBinary('cloudflared', config)
-        const port = await resolvePort()
+        // 端口必须与真正在监听的 HTTP 服务一致：优先用调用方传入的实际绑定端口，
+        // 避免「隧道指向 5000、站点实际在 61350」这类 502。
+        const port = explicitPort ?? (await resolvePort())
         state.localPort = port
         const args = [
           ...(Array.isArray(config.binArgs) ? config.binArgs : []),
@@ -384,7 +387,7 @@ export function createTunnelManager({ config = {}, log = () => {} } = {}) {
     }
   }
 
-  async function start(provider) {
+  async function start(provider, options = {}) {
     const wanted = normalizeProvider(provider || config.provider || 'cloudflared')
     if (state.status === 'running' && state.provider === wanted) return status()
     if (state.starting) {
@@ -392,7 +395,7 @@ export function createTunnelManager({ config = {}, log = () => {} } = {}) {
     }
     if (state.child) await stop()
     state.provider = wanted
-    const promise = doStart(wanted)
+    const promise = doStart(wanted, options)
     state.starting = promise
     try {
       return await promise

@@ -150,8 +150,12 @@ export function apply(ctx) {
     if (state.server) return Promise.resolve(state.server)
     if (state.starting) return state.starting
     const promise = (async () => {
-      const [lo, hi] = Array.isArray(config.portRange) ? config.portRange : [5000, 5050]
-      const port = Number.isInteger(config.port) ? config.port : await pickLocalPort(lo, hi, config.host)
+      const rawRange = Array.isArray(config.portRange) ? config.portRange : [5000, 5050]
+      const [rangeLo, rangeHi] = rawRange.map(Number)
+      const lo = Number.isInteger(rangeLo) && rangeLo > 0 ? rangeLo : 5000
+      const hi = Number.isInteger(rangeHi) && rangeHi >= lo ? rangeHi : 5050
+      const explicitPort = Number.isInteger(config.port) && config.port > 0 ? config.port : null
+      const port = explicitPort ?? (await pickLocalPort(lo, hi, config.host))
       config.port = port
       if (!state.tunnel) {
         state.tunnel = createTunnelManager({
@@ -175,6 +179,11 @@ export function apply(ctx) {
       }
       state.server = server
       state.startError = null
+      if (server.port < lo || server.port > hi) {
+        console.error(
+          `[xiangqi] 提示：服务绑定到 ${server.port}（不在 ${lo}-${hi} 范围内，通常是系统分配）。隧道会使用真实端口 ${server.port}。`,
+        )
+      }
       console.error(`[xiangqi] 服务已启动：${server.url}（邀请链接用 xiangqi_new_game 获取）`)
       return server
     })()
@@ -431,7 +440,7 @@ export function apply(ctx) {
           const server = await ensureReady()
           if (!server) return notReadyText()
           try {
-            const status = await state.tunnel.start(args.provider)
+            const status = await state.tunnel.start(args.provider, { port: server.port })
             return `隧道已开启。\n${tunnelStatusText(status)}`
           } catch (error) {
             const status = state.tunnel ? state.tunnel.status() : {}

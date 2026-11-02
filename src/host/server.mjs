@@ -546,7 +546,7 @@ export async function startServer({
         }
         try {
           if (action === 'start') {
-            await tunnel.start(body.provider)
+            await tunnel.start(body.provider, { port: actualPort })
           } else if (action === 'stop') {
             await tunnel.stop()
           } else if (action !== 'status') {

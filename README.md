@@ -134,6 +134,36 @@ agent 可用的工具（名字固定）：
 
 公网地址示例：`https://example.trycloudflare.com`（每次启动都会变）。
 
+## 排障：公网 502（隧道端口与站点端口不一致）
+
+**现象**：浏览器打公网地址返回 Cloudflare `502 Bad Gateway`，但本机 `http://127.0.0.1:<站点端口>` 打开正常。
+
+**根因**：隧道进程指向的端口和 HTTP 服务**实际绑定**的端口不是同一个。真实踩坑记录：站点绑在 `127.0.0.1:61350`（落在 5000–5050 之外），而 cloudflared 参数是 `--url http://127.0.0.1:5000` → 云边能连上隧道，但回源必然失败。
+
+**一眼定位**（三步）：
+
+```powershell
+# 1) 站点真实端口与隧道端口必须一致（xiangqi_status 里「站点地址」与隧道「本地端口」）
+#    agent 里直接调 xiangqi_status；或看 /api/tunnel 的 localPort
+
+# 2) 隧道进程实际指向哪里
+Get-CimInstance Win32_Process -Filter "Name='cloudflared.exe'" |
+  Select-Object ProcessId, CommandLine
+
+# 3) 那个端口上到底有没有在听
+Get-NetTCPConnection -State Listen |
+  Where-Object { $_.LocalPort -ge 5000 -and $_.LocalPort -le 5050 } |
+  Select-Object LocalAddress, LocalPort, OwningProcess
+```
+
+**处理**：
+
+1. 升级到含修复的版本（`0.1.1` 起：`tunnel.start(provider, { port })` 强制使用服务**实际绑定端口**，不再自行挑口），然后**重启 DSH** 让宿主加载新代码；
+2. 用 `xiangqi_tunnel stop` → `xiangqi_tunnel start` 重新开隧道，公网地址会变；
+3. 若站点端口落在 5000–5050 之外，插件会在宿主日志里打一行「服务绑定到 61350…隧道会使用真实端口」的提示——这是允许的降级路径，但仍然建议重启让端口回到区间内。
+
+**不要这样做**：绕过插件手动 `cloudflared tunnel --url http://127.0.0.1:<port>`。手工进程不受插件管理：`xiangqi_tunnel status` 看不到它、`stop` 杀不掉它、重启 DSH 后它还活着但指向的端口可能已经变了，排查成本会翻倍。
+
 ## 隐私与脱敏
 
 - 仓库内**不出现**真实公网 IP/域名、隧道地址、访问密钥、口令明文、本机绝对路径与用户名。

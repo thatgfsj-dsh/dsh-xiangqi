@@ -115,10 +115,14 @@ export async function startServer({ service, tunnel, token, port, assetsDir, pre
 
 ```js
 export function createTunnelManager({ config, log = () => {} })
-// -> { start(provider?), stop(), status(), onChange(fn), pickLocalPort() }
+// -> { start(provider?, { port }?), stop(), status(), onChange(fn), pickLocalPort() }
 // 状态机 stopped -> starting -> running -> stopped；stop() 只杀自己 spawn 的子进程（记 pid，按 pid 杀）
 ```
 
+- **不变式（2026-11-02 复盘，见 Issue #3）：隧道指向的端口必须等于 HTTP 服务实际绑定的端口。**
+  端口唯一来源是 `startServer()` 返回的 `port`（`server.address().port`），由 `index.js` 与 `/api/tunnel` 显式传给 `tunnel.start(provider, { port })`；
+  隧道**不得**在服务之外自行 `resolvePort()` 挑口。只有调用方没传端口时，才允许回退 `config.port` / `pickLocalPort(5000,5050)`。
+  反例（线上事故）：站点绑到 `61350`，隧道却 `--url http://127.0.0.1:5000` → 公网 502。
 - 本地端口：`pickLocalPort(5000, 5050)` —— 从 5000 起扫，`net.createServer().listen()` 成功即用；全占则抛 `NO_FREE_PORT`。
 - `cloudflared`：spawn `cloudflared tunnel --no-autoupdate --url http://127.0.0.1:<port>`；从 **stderr** 匹配 `https://[a-z0-9-]+\.trycloudflare\.com`；30s 未拿到 URL 判失败；需要代理时读 `config.proxy`（默认 `http://127.0.0.1:7897`）注入 `HTTPS_PROXY`。
 - `natfrp`（SakuraFrp）：`config.natfrp = { token, tunnelId, clientPath }`，默认命令 `[clientPath, '-f', token + ':' + tunnelId]`；缺 token/tunnelId → `start()` 抛 `NOT_CONFIGURED` 并提示改用 cloudflared。URL 从 stdout/stderr 行里匹配 `https?://\S+`。
