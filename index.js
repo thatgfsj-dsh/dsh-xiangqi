@@ -199,12 +199,19 @@ export function apply(ctx) {
     if (state.wake.timer) clearTimeout(state.wake.timer)
     state.wake.timer = setTimeout(() => {
       state.wake.timer = null
-      const last = snapshot.lastMove
-      const who = snapshot.agentSide === 'red' ? '红方' : '黑方'
-      const moveText = last && last.notation ? `${last.notation}${last.iccs ? `（${last.iccs}）` : ''}` : `第 ${snapshot.rev} 手`
-      const text = playing
+      // 投递前再校验一次：500ms 内可能已经换局/又走了一步，
+      // 否则会把上一局结束的旧唤醒晚投到新局里（实测踩到过）。
+      const current = safeSnapshot()
+      if (!current) return
+      if (current.gameId !== snapshot.gameId) return
+      if (current.rev !== snapshot.rev) return
+      if (current.status === 'playing' && current.turn !== current.agentSide) return
+      const last = current.lastMove
+      const who = current.agentSide === 'red' ? '红方' : '黑方'
+      const moveText = last && last.notation ? `${last.notation}${last.iccs ? `（${last.iccs}）` : ''}` : `第 ${current.rev} 手`
+      const text = current.status === 'playing'
         ? `[象棋自动唤醒] 对手刚走 ${moveText}，现在轮到你（${who}）。\n用 xiangqi_board 看当前局面，用 xiangqi_move 应手；走完可继续 xiangqi_wait 等对方落子。`
-        : `[象棋自动唤醒] 对局已结束：${snapshot.status}${snapshot.endReason ? `（${snapshot.endReason}）` : ''}。可用 xiangqi_record 导出记谱。`
+        : `[象棋自动唤醒] 对局已结束：${current.status}${current.endReason ? `（${current.endReason}）` : ''}。可用 xiangqi_record 导出记谱。`
       void wakeAgent(text).then((ok) => {
         if (!ok) console.error('[xiangqi] 自动唤醒未送达（会话可能已关闭或服务不可用）')
       })

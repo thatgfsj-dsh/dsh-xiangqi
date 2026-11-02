@@ -87,3 +87,67 @@ test('人类走子后自动唤醒 agent（followup 一条含着法的用户消�
   await new Promise((resolve) => setTimeout(resolve, 700))
   assert.equal(followups.length, 1, 'agent 自己走子不应触发唤醒')
 })
+
+test('换局会丢弃上一局尚未投递的唤醒（避免把旧局结束消息发到新局）', async (t) => {
+  const followups = []
+  const fakeAgent = {
+    session: { id: 'sess-test-2' },
+    followup(message) {
+      followups.push(message)
+    },
+  }
+  const tools = []
+  const disposers = []
+  const ctx = {
+    tools: { register(definition) { tools.push(definition); return () => {} } },
+    effect(fn) {
+      const disposer = fn()
+      if (typeof disposer === 'function') disposers.push(disposer)
+      return () => {}
+    },
+    on() { return () => {} },
+    get(name) {
+      if (name === 'agents') return { currentInitiator: () => fakeAgent }
+      if (name === 'sessionController') {
+        return {
+          async resolveAgent(sessionId) {
+            return sessionId === fakeAgent.session.id ? { agent: fakeAgent } : { error: new Error('unknown') }
+          },
+        }
+      }
+      if (name === 'sessions') return { async flush() { return true } }
+      return undefined
+    },
+  }
+  const plugin = await import('../index.js')
+  plugin.apply(ctx)
+  t.after(async () => {
+    for (const dispose of disposers.reverse()) {
+      try { await dispose() } catch { /* 忽略 */ }
+    }
+  })
+
+  const byName = (name) => tools.find((tool) => tool.name === name)
+  let text = ''
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    text = await byName('xiangqi_new_game').execute({ humanSide: 'red', minutes: 20 })
+    if (!text.includes('服务未就绪')) break
+    await new Promise((resolve) => setTimeout(resolve, 250))
+  }
+  const match = /http:\/\/127\.0\.0\.1:(\d+)\/\?k=([A-Za-z0-9_-]+)/.exec(text)
+  assert.ok(match, '应返回邀请 URL')
+  const [, port, token] = match
+
+  // 人类走一步（会排一个 500ms 后的唤醒）
+  const res = await fetch(`http://127.0.0.1:${port}/api/move`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-xiangqi-token': token },
+    body: JSON.stringify({ from: 'h2', to: 'e2' }),
+  })
+  assert.equal(res.status, 200)
+
+  // 500ms 内立刻换局 → 旧唤醒必须被丢弃
+  await byName('xiangqi_new_game').execute({ humanSide: 'red', minutes: 20 })
+  await new Promise((resolve) => setTimeout(resolve, 900))
+  assert.equal(followups.length, 0, '换局后不应再收到上一局的唤醒')
+})
