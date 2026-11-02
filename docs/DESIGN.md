@@ -101,14 +101,15 @@ export async function startServer({ service, tunnel, token, port, assetsDir, pre
 |---|---|---|
 | GET | `/` | 校验 `?k=`（或 cookie `xq`）→ 种 cookie + 返回 `web/index.html`；口令错 → 401 极简页 |
 | GET | `/assets/*` | 静态文件（仅 `web/` 目录内的白名单后缀：html/js/css/svg/png/ico） |
-| GET | `/api/state` | `{ok, snapshot, tunnel, invite:{url?}}` |
-| POST | `/api/move` | body `{from,to}` → 200 `{ok, snapshot}` / 409 `{ok:false,code,message}` |
-| POST | `/api/new` | body `{humanSide?, minutes?}` → 200 `{ok, snapshot, url}`（**新 token，旧 token 立即失效**） |
-| POST | `/api/action` | body `{type}` → 200 `{ok, snapshot}` |
-| GET | `/api/events` | SSE：`data: <snapshot json>\n\n`，连上先推一次当前状态，之后每次 rev 变化推一次；25s 心跳注释行 |
+| GET | `/api/state` | `{ok, snapshot, tunnel, invite:{url?}, legal}`（`legal` 为合法性索引） |
+| GET | `/api/wait` | **长轮询（0.2.0 起前端主通道）**：`?since=<rev>&timeout=<ms>`；`since` 与当前 rev 不同（含首次）→ 立即返回；否则挂起，直到 rev / gameId 变化或超时（默认 25s，上限 30s），超时回当前态。响应 `{ok, snapshot, legal}`，一次原子应用 |
+| POST | `/api/move` | body `{from,to}` → 200 `{ok, snapshot, legal}` / 409 `{ok:false,code,message}` |
+| POST | `/api/new` | body `{humanSide?, minutes?}` → 200 `{ok, snapshot, legal, url}`（**新 token，旧 token 立即失效**） |
+| POST | `/api/action` | body `{type}` → 200 `{ok, snapshot, legal, url?}` |
+| GET | `/api/events` | SSE（保留兼容，前端 0.2.0 起不再使用）：`data: <snapshot json>\n\n`，25s 心跳注释行 |
 | GET | `/api/record.md` | `text/markdown; charset=utf-8` |
-| GET | `/api/tunnel` | `{ok, provider, status:'stopped'|'starting'|'running'|'error', url, error}` |
-| POST | `/api/tunnel` | body `{action:'start'|'stop'|'status', provider?}` |
+| GET | `/api/tunnel` | `{ok, provider, status:'stopped'|'starting'|'running'|'error', url, error}`（仅 agent 工具使用） |
+| POST | `/api/tunnel` | body `{action:'start'|'stop'|'status', provider?}`（仅 agent 工具使用；网页无穿透 UI） |
 
 鉴权：`/api/*` 必须带 `x-xiangqi-token`（前端从 cookie/URL 取）或 `?k=`；`POST` 还要 `content-type: application/json`（缺 → 400）。失败一律 401 `{ok:false,code:'UNAUTHORIZED'}`，**不回显 token**。
 
@@ -196,24 +197,27 @@ export function createTunnelManager({ config, log = () => {} })
 
 ## 9. 前端要求（W 实现）
 
-- 纯静态三件套 + 原生 ES module，无构建、无 CDN、无字体外链（棋子在 CSS 里用 `serif` 字体族）。
-- 棋盘：SVG 线格 + 楚河汉界 + 炮/兵位标记；棋子圆形、有立体感（渐变 + 内阴影），红黑双色可辨；点击选子 → 高亮合法落点（服务端 `legalMovesFrom` 可经 `/api/state` 携带或前端本地算——**前端不实现规则，全部以服务端返回为准**：`GET /api/state` 返回 `legal` 字段，见下）。
-- 交互：点选/拖拽均可；非法走子必须弹出**人话错误**（用服务端 `message`），并让棋子抖动回弹。
+- 纯静态文件 + 原生 ES module，无构建、无 CDN、无字体外链（棋子在 CSS 里用 `serif` 字体族）。模块拆分：`app.js`（主流程）、`pieces.js`（棋子/坐标）、`sound.js`（音效）、`feedback.js`（音效开关/招数提示）、`record-view.js`（棋谱渲染），单文件 ≤1000 行。
+- 棋盘：SVG 线格 + 楚河汉界 + 炮/兵位标记；棋子圆形、有立体感（渐变 + 内阴影），红黑双色可辨；点击选子 → 高亮合法落点（**前端不实现规则，全部以服务端返回的 `legal` 为准**）。
+- **手机首屏（0.2.0）**：状态条 + 棋盘（按剩余高度撑满、宽度优先）+ 一排功能键；**棋谱放到首屏下方（下滑可见）**，避免挤压棋盘。桌面 ≥720px 仍为「棋盘 + 右侧信息栏」两栏。
+- **动态刷新（0.2.0，替代 SSE 与补丁式补拉）**：`watchLoop()` 循环请求 `GET /api/wait?since=<rev>`，响应到达即 `applyState({snapshot, legal})` 原子应用；断线按 400ms→4s 退避，`visibilitychange`/`online` 时取消旧请求并立即重启。不存在的「先渲染再拉 legal」路径已删除。
+- **拿起放下动画（0.2.0）**：选中 → `.piece.is-picked`（抬高/放大/光晕，CSS transition）；落子 → 在目标格棋子上用 WAAPI `animate()` 从出发格偏移平移 + 回弹落定（190ms）；`prefers-reduced-motion` 下 CSS 动画自动关闭。
+- 交互：点选走子；非法走子必须弹出**人话错误**（用服务端 `message`），并让棋子抖动回弹。
 - 顶部（手机在上方）：轮到谁（红/黑 + 「你」标记）+ 倒计时 `mm:ss`（≤60s 变红闪烁）。
 - 底部（手机在下方）：棋谱列表（`1. 炮二平五  马8进7` 两列），自动滚动；桌面端放侧栏。
-- 控制区：新局、悔棋、认输、导出记谱（下载 `.md`）、音效开关（🔊/🔇，状态存 localStorage）、穿透开关（显示公网 URL + 复制按钮 + 状态点）。
-- **音效（0.1.5）**：`web/sound.js` 用 Web Audio 实时合成，零音频文件；人类落子低沉、agent 落子清脆，吃子加脆裂声，将军类播两声高音，结束按胜负播上行/下行三音；浏览器自动播放策略要求先有用户手势，`pointerdown`/`keydown` 里 `unlock()`。
-- **招数提示（0.1.5）**：棋谱每手渲染 `tags` 徽标（将军类红色 + `tag-pop` 动画）；将军/将死额外弹 toast + 提示音；逻辑在 `web/feedback.js`，棋谱渲染在 `web/record-view.js`（拆文件以守住单文件 ≤1000 行）。
+- 控制区：新局、悔棋、认输、导出记谱（下载 `.md`）、音效开关（🔊/🔇，状态存 localStorage）。**穿透不在网页上**（0.2.0 移除按钮与面板），只由 agent 工具 `xiangqi_tunnel` 管理。
+- **音效（0.1.5，0.2.0 调清脆）**：`web/sound.js` 用 Web Audio 实时合成，零音频文件；人类落子稍低、agent 落子更亮，吃子加高频脆裂，将军类播两声高音，结束按胜负播上行/下行三音；浏览器自动播放策略要求先有用户手势，`pointerdown`/`keydown` 里 `unlock()`。
+- **招数提示（0.1.5）**：棋谱每手渲染 `tags` 徽标（将军类红色 + `tag-pop` 动画）；将军/将死额外弹 toast + 提示音；逻辑在 `web/feedback.js`，棋谱渲染在 `web/record-view.js`。
 - 结束态：覆盖层显示胜负原因（将死/超时/认输/和棋），提供「再来一局」。
-- 无障碍/健壮：无 JS 时报错文本；SSE 断线自动重连（指数退避）；所有 DOM 更新走文本节点，不 `innerHTML` 拼接用户数据。
-- **`/api/state` 额外返回 `legal`**：`LegalityIndex = { "<fromSquare>": ["<toSquare>", ...] }`，由服务端用 `legalMoves` 全量生成，前端只做展示。
+- 无障碍/健壮：无 JS 时报错文本；长轮询断线自动退避重连；所有 DOM 更新走文本节点，不 `innerHTML` 拼接用户数据。
+- **服务端 `legal`**：`LegalityIndex = { "<fromSquare>": ["<toSquare>", ...] }`，由服务端用 `legalMoves` 全量生成；`/api/state`、`/api/wait`、`/api/move`、`/api/new`、`/api/action` 都返回（一次请求即可原子渲染）。
 
 ## 10. 验收（Lead 执行，施工者自测后再交）
 
 1. `npm test`（`node --test`）全绿：规则合法/非法、记谱格式、服务鉴权与 409、隧道端口选择与 mock provider。
 2. `node scripts/dev-server.mjs` 起站，`curl "http://127.0.0.1:<port>/?k=<token>"` 返回页面；错 token 401。
 3. 对局脚本：`POST /api/new` → 连走 6 步（含 2 次非法）→ `GET /api/record.md` 含 12 行着法表；20 分钟超时用注入时钟测。
-4. 前端：真实浏览器打开移动端视口（390×844），上方时间/轮次、下方棋谱、点选走子、非法报错、结束覆盖层各截一张图。
+4. 前端：真实浏览器打开移动端视口（390×844），确认首屏只有状态+棋盘+一排功能、棋谱在首屏下方；点选有拿起动画、落子有落位动画；走子后页面靠长轮询自更新（另一客户端走子 → 页面 ≤300ms 内变化）；截取首屏/拿起/棋谱与音效开关各一张图。
 5. DSH 冒烟：`dsh --profile web --patch <临时 overlay> --help` 能加载插件不报错（端口绑定在 `--help` 下不得阻塞退出）。
 6. 隧道：`cloudflared` 起 → 拿到 `https://*.trycloudflare.com` → 从本机 `curl` 该 URL 的 `/api/state` 通 → stop 后端口与子进程都消失。
 

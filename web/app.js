@@ -14,32 +14,31 @@ import { createSoundKit } from './sound.js'
 import { createFeedback } from './feedback.js'
 import { createRecordView } from './record-view.js'
 const API = {
-  state: '/api/state', move: '/api/move', newGame: '/api/new', action: '/api/action',
-  events: '/api/events', record: '/api/record.md', tunnel: '/api/tunnel',
+  state: '/api/state', wait: '/api/wait', move: '/api/move', newGame: '/api/new',
+  action: '/api/action', record: '/api/record.md',
 }
-const SSE_MIN_DELAY = 1000
-const SSE_MAX_DELAY = 30000
+// 动态刷新：长轮询（服务端挂起最多 25s，局面一变立刻回包）。比 SSE 更抗代理缓冲，
+// 公网隧道 / 手机网络下都能稳定收到更新，不需要「先渲染再补拉」的补丁式刷新。
+const WATCH_MIN_DELAY = 400
+const WATCH_MAX_DELAY = 4000
 const LOW_TIME_MS = 60000
-const TUNNEL_POLL_MS = 40000
 const SIDE_LABEL = { red: '红方', black: '黑方' }
 const sound = createSoundKit()
 const feedback = createFeedback({ sound, showToast, parseFen })
-const TUNNEL_TEXT = { stopped: '穿透未开启', starting: '穿透启动中…', running: '穿透已开启', error: '穿透出错', unavailable: '穿透不可用' }
 const END_REASON_TEXT = { resign: '认输', timeout: '超时', expired: '超时', checkmate: '将死', stalemate: '困毙', draw: '和棋', forfeit: '判负', abandoned: '中途退出' }
 const $ = (id) => document.getElementById(id)
 const ui = {
   app: $('app'), stage: $('stage'), board: $('board'), marks: $('layer-marks'), pieces: $('layer-pieces'), turnDot: $('turn-dot'), turnText: $('turn-text'), turnYou: $('turn-you'), timer: $('timer'),
-  btnNew: $('btn-new'), btnUndo: $('btn-undo'), btnResign: $('btn-resign'), btnRecord: $('btn-record'), btnSound: $('btn-sound'), btnTunnel: $('btn-tunnel'), recordScroll: $('record-scroll'), recordList: $('record-list'), recordCount: $('record-count'), recordEmpty: $('record-empty'),
-  tunnelDot: $('tunnel-dot'), tunnelStatus: $('tunnel-status'), tunnelProvider: $('tunnel-provider'), tunnelToggle: $('btn-tunnel-toggle'), tunnelUrlRow: $('tunnel-url-row'), tunnelUrl: $('tunnel-url'), btnCopy: $('btn-copy'), tunnelHint: $('tunnel-hint'),
+  btnNew: $('btn-new'), btnUndo: $('btn-undo'), btnResign: $('btn-resign'), btnRecord: $('btn-record'), btnSound: $('btn-sound'), recordScroll: $('record-scroll'), recordList: $('record-list'), recordCount: $('record-count'), recordEmpty: $('record-empty'),
   overlay: $('overlay'), overlayTitle: $('overlay-title'), overlayReason: $('overlay-reason'), overlayKicker: $('overlay-kicker'), btnAgain: $('btn-again'), btnOverlayRecord: $('btn-overlay-record'), btnOverlayClose: $('btn-overlay-close'),
   toast: $('toast'), netBanner: $('net-banner'), bootNote: $('boot-note'), boardHint: $('board-hint'),
 }
 const store = {
-  token: readToken(), snapshot: null, legal: Object.create(null), tunnel: null,
-  board: new Map(), pieceNodes: new Map(), selected: null, busy: false, tunnelBusy: false,
-  connected: false, unauthorized: false, overlayDismissed: false, legalPending: false, moveCount: -1,
-  timerBase: null, tickHandle: 0, eventsAbort: null, retryTimer: 0, retryDelay: SSE_MIN_DELAY,
-  pollTimer: 0, stateRefreshTimer: 0, toastTimer: 0, timeoutProbe: false,
+  token: readToken(), snapshot: null, legal: Object.create(null),
+  board: new Map(), pieceNodes: new Map(), selected: null, busy: false,
+  connected: false, unauthorized: false, overlayDismissed: false, moveCount: -1,
+  timerBase: null, tickHandle: 0, watchAbort: null, watchTimer: 0, watchDelay: WATCH_MIN_DELAY,
+  toastTimer: 0, timeoutProbe: false, animating: false,
 }
 class ApiError extends Error {
   constructor(info) {
@@ -108,6 +107,7 @@ async function api(path, options = {}) {
       body: payload,
       cache: 'no-store',
       credentials: 'same-origin',
+      signal: options.signal,
     })
   } catch (err) {
     throw new ApiError({ code: 'NETWORK', message: '网络连接失败，请检查网络后重试', network: true })
@@ -138,10 +138,6 @@ async function loadState() {
   applyState(data)
   return data
 }
-function queueStateRefresh(delay = 120) {
-  window.clearTimeout(store.stateRefreshTimer)
-  store.stateRefreshTimer = window.setTimeout(() => loadState().catch(() => {}), delay)
-}
 // ---------- 状态应用 ----------
 function normalizeLegal(raw) {
   const out = Object.create(null)
@@ -161,11 +157,6 @@ function applyState(data) {
   if (!data || typeof data !== 'object') return
   if (data.legal && typeof data.legal === 'object') {
     store.legal = normalizeLegal(data.legal)
-    store.legalPending = false
-  }
-  if (data.tunnel && typeof data.tunnel === 'object') {
-    store.tunnel = data.tunnel
-    renderTunnel()
   }
   if (data.snapshot && typeof data.snapshot === 'object') applySnapshot(data.snapshot)
   else if (data.fen || data.rev !== undefined) applySnapshot(data)
@@ -196,9 +187,8 @@ function applySnapshot(snap) {
     renderMarks()
     renderRecord()
     if (prev !== null) {
-      store.legalPending = true
-      queueStateRefresh()
       feedback.onSnapshot(prev, snap)
+      animateMove(prev, snap)
     }
   }
   renderTurn()
@@ -268,16 +258,6 @@ function renderPieces() {
   store.pieceNodes = next
   ui.pieces.replaceChildren(fragment)
   syncSelectedPiece()
-  const snap = store.snapshot
-  const last = snap && snap.lastMove
-  const to = last && squareOf(last.to)
-  const node = to ? store.pieceNodes.get(to) : null
-  if (node) {
-    node.classList.remove('is-moved')
-    void node.offsetWidth
-    node.classList.add('is-moved')
-    window.setTimeout(() => node.classList.remove('is-moved'), 420)
-  }
 }
 function makeMark(className, square) {
   const node = document.createElement('div')
@@ -368,38 +348,12 @@ function renderOverlay() {
   }
   ui.overlay.hidden = false
 }
-function renderTunnel() {
-  const tunnel = store.tunnel && typeof store.tunnel === 'object' ? store.tunnel : null
-  const status = tunnel && typeof tunnel.status === 'string' ? tunnel.status : 'stopped'
-  const dotStatus = ['starting', 'running', 'error', 'unavailable'].includes(status) ? status : 'stopped'
-  ui.tunnelDot.className = 'dot dot--tunnel dot--' + dotStatus
-  ui.tunnelStatus.textContent = TUNNEL_TEXT[status] || TUNNEL_TEXT.stopped
-  const url = tunnel && typeof tunnel.url === 'string' ? tunnel.url : ''
-  ui.tunnelUrlRow.hidden = !(status === 'running' && url)
-  if (ui.tunnelUrl.textContent !== url) ui.tunnelUrl.textContent = url
-  ui.tunnelToggle.textContent = status === 'running' || status === 'starting' ? '关闭' : '开启'
-  ui.btnTunnel.setAttribute('aria-expanded', status === 'running' ? 'true' : 'false')
-  ui.tunnelProvider.disabled = status === 'starting' || status === 'running'
-  if (tunnel && typeof tunnel.provider === 'string' && tunnel.provider !== ui.tunnelProvider.value) {
-    if (tunnel.provider === 'cloudflared' || tunnel.provider === 'natfrp') ui.tunnelProvider.value = tunnel.provider
-  }
-  let hint
-  if (status === 'running') hint = '公网地址已就绪：把带口令的完整链接发给对方即可。'
-  else if (status === 'starting') hint = '正在启动隧道，拿到公网地址后会自动显示…'
-  else if (status === 'error' || status === 'unavailable') hint = tunnel && typeof tunnel.error === 'string' && tunnel.error
-    ? tunnel.error
-    : '隧道不可用，请查看 DSH 日志，或换一个提供方再试。'
-  else hint = '未开启。点「开启」由插件拉起 cloudflared quick tunnel，或在 DSH 里让 agent 执行 xiangqi_tunnel start。'
-  if (ui.tunnelHint.textContent !== hint) ui.tunnelHint.textContent = hint
-}
 function updateControls() {
   const snap = store.snapshot
   const over = !snap || snap.status !== 'playing'
   ui.btnUndo.disabled = over || store.busy
   ui.btnResign.disabled = over || store.busy
   ui.btnRecord.disabled = !snap || snap.status === 'no-game'
-  ui.tunnelToggle.disabled = store.tunnelBusy
-  ui.btnCopy.disabled = ui.tunnelUrlRow.hidden
   ui.app.setAttribute('aria-busy', store.busy ? 'true' : 'false')
 }
 // ---------- 提示 / 连接状态 ----------
@@ -446,7 +400,6 @@ function reportError(err, fallback) {
   if (err && err.network) {
     showBanner('网络连接失败，恢复后会自动重连…')
     showToast(fallback + '：网络异常', 'error')
-    queueStateRefresh(1500)
     return
   }
   if (err && err.code === 'UNAUTHORIZED') return
@@ -482,10 +435,6 @@ function handleSquare(square) {
     return
   }
   if (store.busy) return
-  if (store.legalPending) {
-    showToast('正在同步棋局，请稍候…', 'info')
-    return
-  }
   const human = snap.humanSide === 'black' ? 'black' : 'red'
   const piece = store.board.get(square)
   if (store.selected) {
@@ -524,6 +473,7 @@ function handleSquare(square) {
 }
 function selectSquare(square) {
   store.selected = square
+  markPicked(square, true)
   renderMarks()
   if (navigator.vibrate) {
     try {
@@ -535,6 +485,7 @@ function selectSquare(square) {
 }
 function clearSelection() {
   if (!store.selected) return
+  markPicked(store.selected, false)
   store.selected = null
   renderMarks()
 }
@@ -561,7 +512,7 @@ async function doMove(from, to) {
     shakePiece(from)
     if (err && err.status === 409) {
       showToast(err.message || '这一步走不了', 'error')
-      queueStateRefresh(0)
+      refreshNow()
     } else {
       reportError(err, '走子失败')
     }
@@ -668,195 +619,115 @@ async function exportRecord() {
   window.setTimeout(() => URL.revokeObjectURL(objectUrl), 3000)
   showToast('记谱已开始下载', 'ok')
 }
-// ---------- 内网穿透 ----------
-async function refreshTunnel() {
-  try {
-    const data = await api(API.tunnel)
-    const state = data && data.tunnel && typeof data.tunnel === 'object' ? data.tunnel : data
-    if (state && typeof state === 'object') {
-      store.tunnel = state
-      renderTunnel()
-    }
-    return state
-  } catch (err) {
-    return null
-  }
-}
-async function toggleTunnel() {
-  if (store.tunnelBusy) return
-  if (store.unauthorized) {
-    showToast('口令无效，无法操作', 'error')
-    return
-  }
-  const status = store.tunnel && store.tunnel.status
-  const action = status === 'running' || status === 'starting' ? 'stop' : 'start'
-  store.tunnelBusy = true
-  updateControls()
-  try {
-    const body = { action }
-    if (action === 'start' && ui.tunnelProvider.value) body.provider = ui.tunnelProvider.value
-    const data = await api(API.tunnel, { method: 'POST', body })
-    const state = data && data.tunnel && typeof data.tunnel === 'object' ? data.tunnel : data
-    if (state && typeof state === 'object' && (state.status || state.provider)) {
-      store.tunnel = state
-      renderTunnel()
-    } else {
-      await refreshTunnel()
-    }
-    if (action === 'start') await pollTunnel()
-    else showToast('穿透已关闭', 'ok')
-  } catch (err) {
-    reportError(err, action === 'start' ? '开启穿透失败' : '关闭穿透失败')
-    await refreshTunnel()
-  } finally {
-    store.tunnelBusy = false
-    updateControls()
-  }
-}
-async function pollTunnel() {
-  const startedAt = Date.now()
-  while (Date.now() - startedAt < TUNNEL_POLL_MS) {
-    await sleep(1200)
-    const state = await refreshTunnel()
-    if (!state) return
-    if (state.status === 'running') {
-      showToast('穿透已开启', 'ok')
-      return
-    }
-    if (state.status === 'error') {
-      showToast(typeof state.error === 'string' && state.error ? state.error : '隧道启动失败', 'error')
-      return
-    }
-    if (state.status === 'stopped') return
-  }
-  showToast('隧道仍在启动，可稍后再点「穿透」查看状态', 'info')
-}
-function legacyCopy(text) {
-  try {
-    const input = document.createElement('textarea')
-    input.value = text
-    input.setAttribute('readonly', 'readonly')
-    input.style.position = 'fixed'
-    input.style.opacity = '0'
-    document.body.appendChild(input)
-    input.select()
-    const ok = document.execCommand('copy')
-    input.remove()
-    return Boolean(ok)
-  } catch (err) {
-    return false
-  }
-}
-async function copyTunnelUrl() {
-  const url = ui.tunnelUrl.textContent || ''
-  if (!url) return
-  let ok = false
-  try {
-    if (navigator.clipboard && navigator.clipboard.writeText) {
-      await navigator.clipboard.writeText(url)
-      ok = true
-    }
-  } catch (err) {
-    ok = false
-  }
-  if (!ok) ok = legacyCopy(url)
-  showToast(ok ? '公网地址已复制' : '复制失败，请长按地址手动复制', ok ? 'ok' : 'error')
-}
-// ---------- SSE：指数退避重连 ----------
-function stopEvents() {
-  window.clearTimeout(store.retryTimer)
-  store.retryTimer = 0
-  if (store.eventsAbort) {
+// ---------- 动态刷新：长轮询 ----------
+// 与服务端 /api/wait 配合：请求挂在服务端最多 25s，局面一变立刻返回 {snapshot, legal}。
+// 一次响应原子应用（棋盘 + 合法落点 + 棋谱一起换），不做「先渲染再补拉」的补丁式刷新。
+function stopWatching() {
+  window.clearTimeout(store.watchTimer)
+  store.watchTimer = 0
+  if (store.watchAbort) {
     try {
-      store.eventsAbort.abort()
+      store.watchAbort.abort()
     } catch (err) {
       // 忽略
     }
-    store.eventsAbort = null
+    store.watchAbort = null
   }
 }
-function handleEventChunk(chunk) {
-  if (!chunk) return
-  const dataLines = []
-  for (const raw of chunk.split('\n')) {
-    const line = raw.endsWith('\r') ? raw.slice(0, -1) : raw
-    if (line.startsWith('data:')) dataLines.push(line.slice(5).replace(/^\s+/, ''))
-  }
-  if (dataLines.length === 0) return
-  const text = dataLines.join('\n').trim()
-  if (!text) return
-  let payload
-  try {
-    payload = JSON.parse(text)
-  } catch (err) {
-    return
-  }
-  if (payload && typeof payload === 'object' && payload.snapshot) applyState(payload)
-  else if (payload && typeof payload === 'object' && (payload.fen || payload.rev !== undefined)) applySnapshot(payload)
-}
-async function readEventStream(body) {
-  const reader = body.getReader()
-  const decoder = new TextDecoder()
-  let buffer = ''
-  while (true) {
-    const result = await reader.read()
-    if (result.done) return
-    buffer += decoder.decode(result.value, { stream: true })
-    let index = buffer.indexOf('\n\n')
-    while (index >= 0) {
-      handleEventChunk(buffer.slice(0, index))
-      buffer = buffer.slice(index + 2)
-      index = buffer.indexOf('\n\n')
-    }
-    if (buffer.length > 262144) buffer = ''
-  }
-}
-function scheduleReconnect() {
+function startWatching() {
   if (store.unauthorized) return
-  const delay = store.retryDelay
-  store.retryDelay = Math.min(SSE_MAX_DELAY, Math.round(store.retryDelay * 2))
-  showBanner('实时连接断开，' + Math.round(delay / 1000) + ' 秒后重连…')
-  window.clearTimeout(store.retryTimer)
-  store.retryTimer = window.setTimeout(() => {
-    connectEvents()
-  }, delay)
-}
-async function connectEvents() {
-  if (store.unauthorized) return
-  stopEvents()
+  stopWatching()
   const controller = new AbortController()
-  store.eventsAbort = controller
-  const headers = { accept: 'text/event-stream' }
-  if (store.token) headers['x-xiangqi-token'] = store.token
-  try {
-    const res = await fetch(API.events, {
-      headers,
-      cache: 'no-store',
-      credentials: 'same-origin',
-      signal: controller.signal,
-    })
-    if (res.status === 401) {
-      markUnauthorized()
-      return
+  store.watchAbort = controller
+  store.watchDelay = WATCH_MIN_DELAY
+  void watchLoop(controller)
+}
+async function watchLoop(controller) {
+  while (!controller.signal.aborted) {
+    const since = store.snapshot && Number.isFinite(store.snapshot.rev) ? store.snapshot.rev : null
+    const path = since === null ? API.wait : API.wait + '?since=' + since
+    try {
+      const data = await api(path, { signal: controller.signal })
+      if (controller.signal.aborted) return
+      applyState(data)
+      setConnected(true)
+      store.watchDelay = WATCH_MIN_DELAY
+    } catch (err) {
+      if (controller.signal.aborted) return
+      if (err && err.code === 'UNAUTHORIZED') return
+      setConnected(false)
+      showBanner('实时连接断开，' + Math.round(store.watchDelay / 1000) + ' 秒后重连…')
+      await sleep(store.watchDelay)
+      store.watchDelay = Math.min(WATCH_MAX_DELAY, Math.round(store.watchDelay * 1.8))
     }
-    if (!res.ok) throw new Error('事件流返回 HTTP ' + res.status)
-    if (!res.body) throw new Error('浏览器不支持流式读取')
-    store.retryDelay = SSE_MIN_DELAY
-    setConnected(true)
-    await readEventStream(res.body)
-    throw new Error('事件流结束')
-  } catch (err) {
-    if (controller.signal.aborted) return
-    setConnected(false)
-    scheduleReconnect()
   }
 }
-function ensurePolling() {
-  if (store.pollTimer) return
-  store.pollTimer = window.setInterval(() => {
-    if (store.connected || store.unauthorized) return
-    loadState().catch(() => {})
-  }, 5000)
+/** 立刻取一次最新状态（走长轮询的「立即返回」分支）。 */
+function refreshNow() {
+  loadState().catch(() => {})
+}
+/** 重新开始长轮询（切回前台 / 网络恢复后调用，老的挂起请求先取消）。 */
+function restartWatching() {
+  if (store.unauthorized) return
+  startWatching()
+}
+
+// ---------- 落子动画：拿起 → 落下 ----------
+/** 目标方格的像素坐标（相对棋盘）。 */
+function squarePoint(square) {
+  const pos = parseSquare(square)
+  if (!pos) return null
+  const width = ui.board.clientWidth
+  const height = ui.board.clientHeight
+  if (!width || !height) return null
+  return {
+    x: ((VIEW.x + pos.file) / VIEW.w) * width,
+    y: ((VIEW.y + (9 - pos.rank)) / VIEW.h) * height,
+  }
+}
+/**
+ * 上一手是「从 A 走到 B」时，让 B 点的棋子从 A 点平移过来并轻微落定（FLIP 式动画）。
+ * 只在同一局内有上一手时播放；动画结束清理内联样式。
+ */
+function animateMove(prev, snap) {
+  const last = snap && Array.isArray(snap.moves) ? snap.moves[snap.moves.length - 1] : null
+  if (!last || !last.from || !last.to) return
+  if (prev && prev.gameId && snap.gameId && prev.gameId !== snap.gameId) return
+  const toSquare = squareOf(snap.lastMove && snap.lastMove.to)
+  const node = toSquare ? store.pieceNodes.get(toSquare) : null
+  if (!node || typeof node.animate !== 'function') return
+  const from = squarePoint(snapshotToSquare(last.from))
+  const to = squarePoint(toSquare)
+  if (!from || !to) return
+  const dx = Math.round(from.x - to.x)
+  const dy = Math.round(from.y - to.y)
+  if (dx === 0 && dy === 0) return
+  try {
+    node.animate(
+      [
+        {
+          transform: 'translate(calc(-50% + ' + dx + 'px), calc(-50% + ' + dy + 'px)) scale(1.06)',
+          filter: 'brightness(1.06)',
+          offset: 0,
+        },
+        { transform: 'translate(-50%, -50%) scale(0.988)', filter: 'brightness(1.02)', offset: 0.82 },
+        { transform: 'translate(-50%, -50%) scale(1)', filter: 'brightness(1)', offset: 1 },
+      ],
+      { duration: 190, easing: 'cubic-bezier(0.22, 0.8, 0.3, 1)' },
+    )
+  } catch (err) {
+    // 动画失败不影响棋局
+  }
+}
+function snapshotToSquare(point) {
+  if (!point || typeof point.file !== 'number' || typeof point.rank !== 'number') return null
+  return squareName({ file: point.file, rank: point.rank })
+}
+/** 拿起效果：选中的棋子抬高 + 阴影加深（CSS 类控制，配合 transition）。 */
+function markPicked(square, picked) {
+  const node = square ? store.pieceNodes.get(squareOf(square)) : null
+  if (!node) return
+  node.classList.toggle('is-picked', Boolean(picked))
 }
 // ---------- 尺寸自适应 ----------
 let fitPending = false
@@ -923,9 +794,6 @@ function bindEvents() {
   ui.btnUndo.addEventListener('click', () => runAction('undo'))
   ui.btnResign.addEventListener('click', () => runAction('resign'))
   ui.btnRecord.addEventListener('click', () => exportRecord())
-  ui.btnTunnel.addEventListener('click', () => toggleTunnel())
-  ui.tunnelToggle.addEventListener('click', () => toggleTunnel())
-  ui.btnCopy.addEventListener('click', () => copyTunnelUrl())
   ui.btnAgain.addEventListener('click', () => startNewGame(true))
   ui.btnOverlayRecord.addEventListener('click', () => exportRecord())
   ui.btnOverlayClose.addEventListener('click', () => {
@@ -945,9 +813,14 @@ function bindEvents() {
   }
   document.addEventListener('keydown', onKeyDown)
   document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'visible') { loadState().catch(() => {}); if (!store.connected) connectEvents() }
+    if (document.visibilityState !== 'visible') return
+    refreshNow()
+    restartWatching()
   })
-  window.addEventListener('online', () => { loadState().catch(() => {}); connectEvents() })
+  window.addEventListener('online', () => {
+    refreshNow()
+    restartWatching()
+  })
   window.addEventListener('offline', () => showBanner('网络已断开，恢复后会自动重连…'))
 }
 function init() {
@@ -958,16 +831,14 @@ function init() {
   watchSize()
   renderTurn()
   renderTimer()
-  renderTunnel()
   updateControls()
-  ensurePolling()
   loadState()
     .then(() => {
-      connectEvents()
+      startWatching()
     })
     .catch((err) => {
       reportError(err, '读取棋局失败')
-      if (!store.unauthorized) connectEvents()
+      if (!store.unauthorized) startWatching()
     })
 }
 init()

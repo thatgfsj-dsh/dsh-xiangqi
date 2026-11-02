@@ -39,11 +39,7 @@ const MOUNT_IDS = [
   'btn-resign',
   'btn-record',
   'btn-sound',
-  'btn-tunnel',
   'btn-again',
-  'tunnel-status',
-  'tunnel-url',
-  'btn-copy',
 ]
 
 const passes = []
@@ -224,6 +220,24 @@ if (recordViewJs) {
 }
 if (css) {
   check('style.css 有招数徽标样式', /\.record-tag\b/.test(css), '缺少 .record-tag 样式')
+}
+
+// ---------- 9. 动态刷新 / 手机首屏 / 落子动画 / 去穿透 UI ----------
+if (html) {
+  check('index.html 不再有穿透按钮', !/id="btn-tunnel"/.test(html), '穿透按钮应移除')
+  check('index.html 不再有穿透面板', !/id="tunnel-panel"|id="tunnel-status"/.test(html), '穿透面板应移除')
+}
+if (appJs) {
+  check('app.js 使用长轮询 /api/wait 动态刷新', /API\.wait/.test(appJs) && /\/api\/wait/.test(appJs), '缺少长轮询')
+  check('app.js 不再用 SSE/EventSource', !/EventSource|text\/event-stream|connectEvents/.test(appJs), 'SSE 代码应移除')
+  check('app.js 有落子动画（WAAPI）', /function animateMove/.test(appJs) && /\.animate\(/.test(appJs), '缺少落子动画')
+  check('app.js 有拿起态切换', /is-picked/.test(appJs), '缺少 is-picked')
+  check('app.js 不再有穿透接口调用', !/API\.tunnel|toggleTunnel/.test(appJs), '穿透前端逻辑应移除')
+}
+if (css) {
+  check('style.css 有拿起抬起样式', /\.piece\.is-picked/.test(css), '缺少 .piece.is-picked')
+  check('style.css 手机首屏棋盘占满剩余高度', /\.stage\s*\{[\s\S]*?height:\s*calc\(100svh - 1\d\dpx\)/.test(css), '缺少手机首屏高度')
+  check('style.css 棋谱不再挤占首屏（无 max-height 限制）', /\.record\s*\{[\s\S]*?max-height:\s*none/.test(css), '棋谱应放在首屏下方')
 }
 
 // ---------- 汇总 ----------
