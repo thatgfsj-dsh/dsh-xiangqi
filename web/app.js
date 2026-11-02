@@ -19,7 +19,8 @@ const SSE_MAX_DELAY = 30000
 const LOW_TIME_MS = 60000
 const TUNNEL_POLL_MS = 40000
 const SIDE_LABEL = { red: '红方', black: '黑方' }
-const TUNNEL_TEXT = { stopped: '穿透未开启', starting: '穿透启动中…', running: '穿透已开启', error: '穿透出错' }
+const TUNNEL_TEXT = { stopped: '穿透未开启', starting: '穿透启动中…', running: '穿透已开启', error: '穿透出错', unavailable: '穿透不可用' }
+const END_REASON_TEXT = { resign: '认输', timeout: '超时', expired: '超时', checkmate: '将死', stalemate: '困毙', draw: '和棋', forfeit: '判负', abandoned: '中途退出' }
 const $ = (id) => document.getElementById(id)
 const ui = {
   app: $('app'), stage: $('stage'), board: $('board'), marks: $('layer-marks'), pieces: $('layer-pieces'), turnDot: $('turn-dot'), turnText: $('turn-text'), turnYou: $('turn-you'), timer: $('timer'),
@@ -208,10 +209,11 @@ function renderTurn() {
     return
   }
   if (snap.status !== 'playing') {
-    ui.turnText.textContent = '对局结束'
+    const idle = snap.status === 'no-game'
+    ui.turnText.textContent = idle ? '等待开局' : '对局结束'
     ui.turnYou.hidden = true
     ui.turnDot.className = 'dot dot--turn dot--done'
-    ui.boardHint.textContent = '对局已结束'
+    ui.boardHint.textContent = idle ? '还没有开局：让 agent 开一局，或点「新局」' : '对局已结束'
     return
   }
   const turn = snap.turn === 'black' ? 'black' : 'red'
@@ -345,13 +347,20 @@ function renderRecord() {
   }
 }
 function endReason(snap) {
-  const candidates = [snap.endReason, snap.reason, snap.statusText, snap.resultText, snap.result]
-  for (const value of candidates) {
-    if (typeof value === 'string' && value.trim()) return value.trim()
+  const raw = snap.endReason
+  if (typeof raw === 'string' && raw.trim()) {
+    const key = raw.trim().toLowerCase()
+    if (END_REASON_TEXT[key]) return END_REASON_TEXT[key]
+    if (/[\u4e00-\u9fff]/.test(raw)) return raw.trim()
   }
-  if (snap.status === 'draw') return '双方和棋'
+  for (const value of [snap.reason, snap.statusText, snap.resultText, snap.result]) {
+    if (typeof value === 'string' && value.trim() && /[\u4e00-\u9fff]/.test(value)) return value.trim()
+  }
+  if (snap.status === 'draw') return '和棋'
+  if (snap.status === 'no-game') return ''
   if (typeof snap.remainingMs === 'number' && snap.remainingMs <= 0) return '超时'
-  return '将死'
+  if (snap.status === 'red-win' || snap.status === 'black-win') return '将死'
+  return ''
 }
 function renderOverlay() {
   const snap = store.snapshot
@@ -366,25 +375,26 @@ function renderOverlay() {
     return
   }
   const human = snap.humanSide === 'black' ? 'black' : 'red'
+  const noGame = snap.status === 'no-game'
   const winner = snap.status === 'red-win' ? 'red' : snap.status === 'black-win' ? 'black' : null
   const reason = endReason(snap)
-  ui.overlayKicker.textContent = '对局结束'
-  if (!winner) {
+  ui.overlayKicker.textContent = noGame ? '尚未开局' : '对局结束'
+  if (noGame) {
+    ui.overlayTitle.textContent = '暂无对局'
+    ui.overlayReason.textContent = '在 DSH 里让 agent 用 xiangqi_new_game 开一局，或点「新局」。'
+  } else if (!winner) {
     ui.overlayTitle.textContent = '和棋'
-    ui.overlayReason.textContent = reason
-  } else if (winner === human) {
-    ui.overlayTitle.textContent = '你赢了'
-    ui.overlayReason.textContent = sideLabel(winner) + '胜 · ' + reason
+    ui.overlayReason.textContent = reason ? '双方' + reason : '双方和棋'
   } else {
-    ui.overlayTitle.textContent = '你输了'
-    ui.overlayReason.textContent = sideLabel(winner) + '胜 · ' + reason
+    ui.overlayTitle.textContent = winner === human ? '你赢了' : '你输了'
+    ui.overlayReason.textContent = sideLabel(winner) + '胜' + (reason ? ' · ' + reason : '')
   }
   ui.overlay.hidden = false
 }
 function renderTunnel() {
   const tunnel = store.tunnel && typeof store.tunnel === 'object' ? store.tunnel : null
   const status = tunnel && typeof tunnel.status === 'string' ? tunnel.status : 'stopped'
-  const dotStatus = ['starting', 'running', 'error'].includes(status) ? status : 'stopped'
+  const dotStatus = ['starting', 'running', 'error', 'unavailable'].includes(status) ? status : 'stopped'
   ui.tunnelDot.className = 'dot dot--tunnel dot--' + dotStatus
   ui.tunnelStatus.textContent = TUNNEL_TEXT[status] || TUNNEL_TEXT.stopped
   const url = tunnel && typeof tunnel.url === 'string' ? tunnel.url : ''
@@ -399,9 +409,9 @@ function renderTunnel() {
   let hint
   if (status === 'running') hint = '公网地址已就绪：把带口令的完整链接发给对方即可。'
   else if (status === 'starting') hint = '正在启动隧道，拿到公网地址后会自动显示…'
-  else if (status === 'error') hint = tunnel && typeof tunnel.error === 'string' && tunnel.error
+  else if (status === 'error' || status === 'unavailable') hint = tunnel && typeof tunnel.error === 'string' && tunnel.error
     ? tunnel.error
-    : '隧道启动失败，请查看 DSH 日志，或换一个提供方再试。'
+    : '隧道不可用，请查看 DSH 日志，或换一个提供方再试。'
   else hint = '未开启。点「开启」由插件拉起 cloudflared quick tunnel，或在 DSH 里让 agent 执行 xiangqi_tunnel start。'
   if (ui.tunnelHint.textContent !== hint) ui.tunnelHint.textContent = hint
 }
@@ -410,7 +420,7 @@ function updateControls() {
   const over = !snap || snap.status !== 'playing'
   ui.btnUndo.disabled = over || store.busy
   ui.btnResign.disabled = over || store.busy
-  ui.btnRecord.disabled = !snap
+  ui.btnRecord.disabled = !snap || snap.status === 'no-game'
   ui.tunnelToggle.disabled = store.tunnelBusy
   ui.btnCopy.disabled = ui.tunnelUrlRow.hidden
   ui.app.setAttribute('aria-busy', store.busy ? 'true' : 'false')
@@ -491,7 +501,7 @@ function handleSquare(square) {
     return
   }
   if (snap.status !== 'playing') {
-    showToast('对局已结束，点「再来一局」或「新局」', 'info')
+    showToast(snap.status === 'no-game' ? '还没有开局，点「新局」或让 agent 开一局' : '对局已结束，点「再来一局」或「新局」', 'info')
     return
   }
   if (store.busy) return

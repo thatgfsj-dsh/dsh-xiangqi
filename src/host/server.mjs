@@ -337,7 +337,9 @@ export async function startServer({
     const client = { res, lastRev: -1 }
     sseClients.add(client)
     try {
-      sendSse(res, service.snapshot())
+      const snapshot = service.snapshot()
+      client.lastRev = snapshot.rev
+      sendSse(res, snapshot)
     } catch (error) {
       sendSse(res, {
         ok: false,
