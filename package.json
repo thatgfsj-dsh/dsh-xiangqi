@@ -1,6 +1,6 @@
 {
   "name": "dsh-xiangqi",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "DSH 象棋对弈插件：独立对弈网站 + agent 走子工具 + 一键内网穿透 + Markdown 记谱",
   "type": "module",
   "main": "index.js",

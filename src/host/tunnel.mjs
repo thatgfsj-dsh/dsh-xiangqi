@@ -357,12 +357,20 @@ export function createTunnelManager({ config = {}, log = () => {} } = {}) {
         // 避免「隧道指向 5000、站点实际在 61350」这类 502。
         const port = explicitPort ?? (await resolvePort())
         state.localPort = port
+        // metrics 端口也要避开：多个 cloudflared 抢默认 20241，后来的进程会直接退出（code=1）
+        let metricsPort = null
+        try {
+          metricsPort = await pickLocalPort(20500, 20600, '127.0.0.1')
+        } catch {
+          metricsPort = null
+        }
         const args = [
           ...(Array.isArray(config.binArgs) ? config.binArgs : []),
           'tunnel',
           '--no-autoupdate',
           '--url',
           `http://127.0.0.1:${port}`,
+          ...(metricsPort ? ['--metrics', `127.0.0.1:${metricsPort}`] : []),
         ]
         url = await spawnAndWait(bin, args, { pattern: TRYCLOUDFLARE_RE, provider, port })
       }
