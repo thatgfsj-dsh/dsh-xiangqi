@@ -13,6 +13,7 @@
 - **精美棋盘**：SVG 绘制 9×10 线格、楚河汉界、炮兵位十字标记、九宫斜线；棋子为圆形立体棋子（径向渐变 + 内阴影 + 描边 + 楷体字），红黑双色清晰；选中态、最近一手、合法落点圆点/吃子圈都有独立提示。
 - **点选走子**：点自己的子 → 高亮服务端给出的合法落点 → 点落子。**前端不实现任何规则**，合法性与错误文案全部来自服务端；非法走子弹出服务端返回的人话原因并让棋子抖动回弹。
 - **实时同步**：SSE（`/api/events`）推送局面，断线按 1s→30s 指数退避自动重连，另有轮询兜底；断网、口令失效都有明确提示。
+- **自动唤醒 agent**：人类在网页落子后，插件把最新局面写进 Markdown 记谱的同一时刻，给「发起对局的会话」`followup` 一条用户消息（`[象棋自动唤醒] 对手刚走 …，现在轮到你`），agent 当轮就会查局面并应手——不需要你每次手动喊「该你走了」。没绑定到会话或 `autoWake: false` 时退回「agent 主动 `xiangqi_wait` / 你 ping 一句」的老方式。
 - **一键穿透**：支持 `cloudflared`（默认，quick tunnel）与 `natfrp`（SakuraFrp），状态点 + 公网 URL + 复制按钮。
 - **Markdown 记谱**：中文记谱 + ICCS + FEN + 文字棋盘，可导出 `.md` 给 agent 读。
 - **脱敏**：口令只在运行时产生，落盘记谱与日志只写 `<token>` 占位。
@@ -72,6 +73,7 @@ node scripts/dev-server.mjs
 {
   "port": 5000,
   "minutes": 20,
+  "autoWake": true,
   "proxy": "http://127.0.0.1:7897",
   "binPath": "<可选：cloudflared 可执行文件路径>",
   "natfrp": {
@@ -86,6 +88,7 @@ node scripts/dev-server.mjs
 | --- | --- | --- |
 | `port` | number | 首选端口，默认 `5000`；被占用时在 5000–5050 内另选 |
 | `minutes` | number | 全局限时（分钟），默认 `20`；第一手落子才开始计时 |
+| `autoWake` | boolean | 人类走子后是否自动唤醒发起对局的 agent，默认 `true`；关掉后需 agent 自己 `xiangqi_wait` 或手动喊它 |
 | `proxy` | string | 启动 cloudflared 时注入的 `HTTPS_PROXY`，默认 `http://127.0.0.1:7897` |
 | `binPath` | string | cloudflared / frpc 可执行文件路径；不填则查 `PATH` |
 | `natfrp.token` | string | SakuraFrp 访问密钥，**绝不入仓** |
@@ -101,6 +104,7 @@ node scripts/dev-server.mjs
 | `XQ_TOKEN` | 固定口令（仅本地调试；正常由插件每局随机生成） |
 | `XQ_PORT` | 首选端口 |
 | `XQ_MINUTES` | 全局限时（分钟） |
+| `XQ_AUTO_WAKE` | 自动唤醒开关（`0` / `false` 关闭） |
 | `XQ_NATFRP_TOKEN` | natfrp 访问密钥 |
 | `XQ_NATFRP_TUNNEL` | natfrp 隧道 ID |
 | `XQ_CLOUDFLARED` | cloudflared 可执行文件路径 |

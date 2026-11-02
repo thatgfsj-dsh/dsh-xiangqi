@@ -21,6 +21,7 @@ export function defaultConfig() {
     port: null, // null = 在 5000-5050 里挑空闲口
     portRange: [5000, 5050],
     minutes: 20, // 全局限时（分钟）
+    autoWake: true, // 人类走子后是否自动唤醒发起对局的 agent（followup 一条消息）
     dataDir: join(REPO_ROOT, '.data'), // 记谱落盘目录（games/<gameId>.md）
     // 口令（可选固定值，便于本地调试；正常情况下每局随机生成）
     token: null,
@@ -45,6 +46,7 @@ const ENV_OVERRIDES = [
   ['XQ_TOKEN', ['token'], 'string'],
   ['XQ_PORT', ['port'], 'number'],
   ['XQ_MINUTES', ['minutes'], 'number'],
+  ['XQ_AUTO_WAKE', ['autoWake'], 'boolean'],
   ['XQ_NATFRP_TOKEN', ['natfrp', 'token'], 'string'],
   ['XQ_NATFRP_TUNNEL', ['natfrp', 'tunnelId'], 'string'],
   ['XQ_NATFRP_CLIENT', ['natfrp', 'clientPath'], 'string'],
@@ -85,6 +87,10 @@ function coerce(value, kind) {
     const n = Number(value)
     return Number.isFinite(n) ? n : undefined
   }
+  if (kind === 'boolean') {
+    const text = String(value).trim().toLowerCase()
+    return !(text === '0' || text === 'false' || text === 'off' || text === 'no')
+  }
   return String(value)
 }
 
@@ -114,6 +120,12 @@ export function normalizeConfig(raw, { repoRoot = REPO_ROOT } = {}) {
 
   merged.host = typeof merged.host === 'string' && merged.host ? merged.host : base.host
   merged.proxy = typeof merged.proxy === 'string' ? merged.proxy : base.proxy
+  merged.autoWake = !(
+    merged.autoWake === false ||
+    merged.autoWake === 0 ||
+    merged.autoWake === '0' ||
+    String(merged.autoWake).toLowerCase() === 'false'
+  )
   merged.token = typeof merged.token === 'string' && merged.token ? merged.token : null
   merged.binPath = typeof merged.binPath === 'string' && merged.binPath ? merged.binPath : null
   merged.binArgs = Array.isArray(merged.binArgs) ? merged.binArgs.map(String) : []

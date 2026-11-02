@@ -7,6 +7,7 @@
 //   `dsh --patch <overlay> --help` 被端口/隧道挂住。
 // - ctx.effect 负责在插件卸载时关闭 HTTP 服务与隧道。
 import { mkdir, writeFile } from 'node:fs/promises'
+import { randomUUID } from 'node:crypto'
 import { join } from 'node:path'
 import { REPO_ROOT, loadConfig } from './src/host/config.mjs'
 import { GameError, createGameService } from './src/host/game.mjs'
@@ -143,6 +144,84 @@ export function apply(ctx) {
       tunnel: state.tunnel ? state.tunnel.status() : null,
     }),
   })
+
+  // ---- 自动唤醒：人类在网页走完子后，主动给「发起对局的 agent」补一条用户消息 ----
+  // 没有推送就没有对弈体感：agent 不会自己醒来查局面。这里在状态变化后 followup 一条消息。
+  state.wake = { sessionId: null, lastKey: null, timer: null }
+
+  /** 在工具调用里记录「发起对局的会话」（agent 上下文里有 initiator）。 */
+  function captureSession() {
+    try {
+      const agents = typeof ctx.get === 'function' ? ctx.get('agents') : null
+      const agent = agents && typeof agents.currentInitiator === 'function' ? agents.currentInitiator() : null
+      const id = agent && agent.session && agent.session.id ? String(agent.session.id) : null
+      if (id && id !== state.wake.sessionId) {
+        state.wake.sessionId = id
+        console.error(`[xiangqi] 自动唤醒已绑定会话 ${id}`)
+      }
+    } catch {
+      /* 非 agent 上下文（例如 --help 冒烟）忽略 */
+    }
+  }
+
+  function makeUserMessage(text) {
+    return { id: randomUUID(), role: 'user', content: [{ type: 'text', text }], source: { kind: 'user' } }
+  }
+
+  async function wakeAgent(text) {
+    const sessionId = state.wake.sessionId
+    if (!sessionId) return false
+    try {
+      const controller = typeof ctx.get === 'function' ? ctx.get('sessionController') : null
+      if (!controller || typeof controller.resolveAgent !== 'function') return false
+      const resolved = await controller.resolveAgent(sessionId)
+      if (!resolved || resolved.error || !resolved.agent) return false
+      const agent = resolved.agent
+      if (typeof agent.followup !== 'function') return false
+      agent.followup(makeUserMessage(text))
+      const sessions = typeof ctx.get === 'function' ? ctx.get('sessions') : null
+      if (sessions && typeof sessions.flush === 'function') await sessions.flush(agent.session)
+      return true
+    } catch (error) {
+      console.error(`[xiangqi] 自动唤醒失败：${error && error.message ? error.message : error}`)
+      return false
+    }
+  }
+
+  /** 状态变化后按需唤醒（去重 + 500ms 合并抖动）。 */
+  function scheduleWake(snapshot) {
+    if (!config.autoWake || !state.wake.sessionId || !snapshot) return
+    const playing = snapshot.status === 'playing'
+    if (playing && snapshot.turn !== snapshot.agentSide) return
+    const key = `${snapshot.gameId}:${playing ? `move:${snapshot.rev}` : 'end'}`
+    if (state.wake.lastKey === key) return
+    state.wake.lastKey = key
+    if (state.wake.timer) clearTimeout(state.wake.timer)
+    state.wake.timer = setTimeout(() => {
+      state.wake.timer = null
+      const last = snapshot.lastMove
+      const who = snapshot.agentSide === 'red' ? '红方' : '黑方'
+      const moveText = last && last.notation ? `${last.notation}${last.iccs ? `（${last.iccs}）` : ''}` : `第 ${snapshot.rev} 手`
+      const text = playing
+        ? `[象棋自动唤醒] 对手刚走 ${moveText}，现在轮到你（${who}）。\n用 xiangqi_board 看当前局面，用 xiangqi_move 应手；走完可继续 xiangqi_wait 等对方落子。`
+        : `[象棋自动唤醒] 对局已结束：${snapshot.status}${snapshot.endReason ? `（${snapshot.endReason}）` : ''}。可用 xiangqi_record 导出记谱。`
+      void wakeAgent(text).then((ok) => {
+        if (!ok) console.error('[xiangqi] 自动唤醒未送达（会话可能已关闭或服务不可用）')
+      })
+    }, 500)
+    if (typeof state.wake.timer.unref === 'function') state.wake.timer.unref()
+  }
+
+  state.service.subscribe((snapshot) => {
+    try {
+      scheduleWake(snapshot)
+    } catch {
+      /* 唤醒失败不影响对局 */
+    }
+  })
+  ctx.effect(() => () => {
+    if (state.wake && state.wake.timer) clearTimeout(state.wake.timer)
+  }, 'xiangqi: auto-wake timer')
 
   /** 懒启动 HTTP 服务（apply 内不 await）。返回 server 或 null。 */
   function ensureReady() {
@@ -300,6 +379,7 @@ export function apply(ctx) {
       },
       output: textOutput(),
       async execute(args = {}) {
+        captureSession()
         const server = await ensureReady()
         const created = state.service.newGame({
           humanSide: args.humanSide === 'black' ? 'black' : 'red',
@@ -346,6 +426,7 @@ export function apply(ctx) {
       },
       output: textOutput(),
       async execute(args = {}) {
+        captureSession()
         if (!state.service.hasGame()) return '当前还没有对局。请先调用 xiangqi_new_game 新建一局。'
         const text = String(args.move || '').trim()
         if (!text) return '缺少 move 参数：请给 ICCS（如 h2e2）或中文记谱（如 炮二平五）。'
@@ -466,6 +547,7 @@ export function apply(ctx) {
       parameters: {},
       output: textOutput(),
       async execute() {
+        captureSession()
         const status = state.service.status()
         const lines = [
           `站点地址：${publicUrl() || '（服务尚未就绪）'}`,
@@ -491,6 +573,12 @@ export function apply(ctx) {
           lines.push('隧道：未初始化')
         }
         if (state.startError) lines.push(`服务启动错误：${state.startError.message || state.startError}`)
+        const wakeSession = state.wake && state.wake.sessionId ? state.wake.sessionId.slice(0, 8) : null
+        lines.push(
+          `自动唤醒：${config.autoWake ? '已开启' : '已关闭'}${
+            wakeSession ? `（会话 ${wakeSession}…）` : '（尚未绑定会话：先调 xiangqi_new_game 才会绑定）'
+          }`,
+        )
         return lines.join('\n')
       },
     },

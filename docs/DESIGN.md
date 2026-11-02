@@ -146,7 +146,17 @@ export function createTunnelManager({ config, log = () => {} })
 | `xiangqi_wait` | `{ timeoutMs?: number, sinceRev?: number }` | 长等到人类走子或超时（上限 120000），返回新局面 |
 | `xiangqi_record` | `{}` | 返回 Markdown 记谱全文（同时落盘到数据目录 `games/<gameId>.md`） |
 | `xiangqi_tunnel` | `{ action: 'start'|'stop'|'status', provider?: 'cloudflared'|'natfrp' }` | 开/关/查隧道，返回公网 URL |
-| `xiangqi_status` | `{}` | 站点地址、口令是否就绪、隧道状态、剩余时间 |
+| `xiangqi_status` | `{}` | 站点地址、口令是否就绪、隧道状态、剩余时间、自动唤醒是否绑定会话 |
+
+### 7.1 自动唤醒（2026-11-02 新增，回应用户「md 棋盘同步后触发」）
+
+- **触发点**：`game.service.subscribe(snapshot)` —— 人类在网页落子后快照 `rev` 递增、`recordMarkdown` 同时重算（md 与网站同源同帧），此时判断 `status === 'playing' && turn === agentSide` 即触发唤醒；对局结束也唤醒一次通知结果。
+- **绑定会话**：工具执行时用 `ctx.get('agents').currentInitiator()` 取发起对局的 Agent，记录 `agent.session.id`（`--help` / 无 agent 上下文时忽略）。
+- **投递**：`ctx.get('sessionController').resolveAgent(sessionId)` → `agent.followup(userMessage)` → `ctx.get('sessions').flush(agent.session)`（与官方 `dsh-schedule` 的唤醒路径一致）。
+- **消息形状**：`{ id: randomUUID(), role:'user', content:[{type:'text',text}], source:{kind:'user'} }`；文案带 `[象棋自动唤醒]` 前缀，**不含口令与 URL**（会话会被持久化）。
+- **去重与节流**：以 `gameId:rev`（结束时 `gameId:end`）为键，500ms 合并抖动；agent 自己走子导致 `turn` 变成人类方，不触发。
+- **开关**：`config.autoWake`（默认 true）/ 环境变量 `XQ_AUTO_WAKE=0`；关闭后行为退回「agent 主动 `xiangqi_wait` 或人类喊一句」。
+- **降级**：`sessionController` / `agents` 服务不存在、会话已关闭、flush 失败 → 只打日志，不影响对局。
 
 ## 8. 记谱 Markdown 格式（R 实现 `renderRecordMd`）
 
