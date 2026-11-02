@@ -158,6 +158,7 @@ export function createTunnelManager({ config, log = () => {} })
 - **投递**：`ctx.get('sessionController').resolveAgent(sessionId)` → `agent.followup(userMessage)` → `ctx.get('sessions').flush(agent.session)`（与官方 `dsh-schedule` 的唤醒路径一致）。
 - **消息形状**：`{ id: randomUUID(), role:'user', content:[{type:'text',text}], source:{kind:'user'} }`；文案带 `[象棋自动唤醒]` 前缀，**不含口令与 URL**（会话会被持久化）。
 - **去重与节流**：以 `gameId:rev`（结束时 `gameId:end`）为键，500ms 合并抖动；agent 自己走子导致 `turn` 变成人类方，不触发。
+- **投递前复核（0.1.4）**：500ms 抖动窗口内可能已经换局或又走了一步，所以真正 `followup` 前重新取一次快照；`gameId` / `rev` 不一致、或已轮到人类方就**丢弃**。否则会把「上一局结束」的消息晚投到新局里（实测踩到：换局后收到 `对局已结束：black-win（resign）`，而新局其实刚开始）。
 - **开关**：`config.autoWake`（默认 true）/ 环境变量 `XQ_AUTO_WAKE=0`；关闭后行为退回「agent 主动 `xiangqi_wait` 或人类喊一句」。
 - **降级**：`sessionController` / `agents` 服务不存在、会话已关闭、flush 失败 → 只打日志，不影响对局。
 
