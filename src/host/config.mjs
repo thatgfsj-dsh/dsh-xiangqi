@@ -93,8 +93,9 @@ export function normalizeConfig(raw, { repoRoot = REPO_ROOT } = {}) {
   const base = defaultConfig()
   const merged = deepMerge(base, isPlainObject(raw) ? raw : {})
 
-  const port = Number(merged.port)
-  merged.port = Number.isInteger(port) && port >= 0 && port <= 65535 ? port : null
+  const rawPort = merged.port
+  const port = rawPort === null || rawPort === undefined || rawPort === '' ? null : Number(rawPort)
+  merged.port = Number.isInteger(port) && port > 0 && port <= 65535 ? port : null
 
   const minutes = Number(merged.minutes)
   merged.minutes = Number.isFinite(minutes) && minutes > 0 ? minutes : base.minutes
