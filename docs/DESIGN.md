@@ -1,0 +1,200 @@
+# dsh-xiangqi 设计契约（v1，施工依据）
+
+> 本文件是并行施工的唯一契约。三名施工者只读本文件，各自只写自己的文件范围，不得改本文件、不得改 `package.json`。
+> 目标版本：本机 `dsh 0.2.1-rc.2`、Node 24、Windows。**零第三方依赖**，只允许 Node 内置模块 + 浏览器原生 API。
+
+## 1. 产品定义（已与用户对齐）
+
+- 形态：**独立的对弈网站**（不是 DSH 界面里的面板），由 DSH 插件在宿主进程内起一个 `node:http` 服务，监听 `127.0.0.1:5000-5050` 中某个空闲端口，再由内网穿透暴露到公网。
+- 使用者：**人类在外部用浏览器打开网站**，对手是**本机 DSH 里的 agent**（agent 用插件注册的工具走子），两者操作同一份内存棋局。
+- 棋种：先做**中国象棋**；规则层留可插拔接口，国际象棋后续追加（本期不做）。
+- 对局：**单局制**。同一时刻只有一局；点「新局」即弃掉上一局（旧口令、旧记谱一并作废）。
+- 口令：**18 位**随机串（`[a-z0-9]`），生成时随对局创建，**拼在邀请 URL 里**（`/?k=<token>`），单局用完即扔。token 只存 SHA-256 摘要用于校验，明文只在创建时返回给 agent。
+- 时间：**全局限时 20 分钟**（可配置），第一手落子才开始计时；超时判「超时方负」。顶部实时显示剩余时间与轮到谁。
+- 手机端布局（硬要求）：**上方** = 该谁走 + 剩余时间；**中间** = 棋盘；**下方** = 棋谱（着法列表，滚动、自动滚到底）。桌面端自由排版（宽度 ≥ 720px 用左右分栏即可）。
+- 记谱：中文记谱（如 `炮二平五`）+ ICCS（如 `h2e2`）+ FEN + 文字棋盘，输出 Markdown，给 agent 读。
+- 内网穿透：插件内一键开/关。提供方 `cloudflared`（默认，quick tunnel）与 `natfrp`（SakuraFrp，需要访问密钥/隧道 ID，从本地配置读，绝不入仓）。
+
+## 2. 目录与文件所有权（互不重叠）
+
+| 范围 | 所有者 | 允许写的文件 |
+|---|---|---|
+| 规则与记谱 | R（rules） | `src/rules/*.mjs`、`src/record.mjs`、`tests/rules.test.mjs`、`tests/record.test.mjs` |
+| 宿主/服务/隧道/工具 | H（host） | `index.js`、`src/host/*.mjs`、`scripts/dev-server.mjs`、`tests/game.test.mjs`、`tests/server.test.mjs`、`tests/tunnel.test.mjs` |
+| 前端网站 | W（web） | `web/*`（`index.html`、`app.js`、`style.css`、`pieces.js`）、`scripts/check-web.mjs`、`README.md`、`docs/USER-MANUAL.md` |
+| 契约/清单/评审 | Lead | `docs/DESIGN.md`、`package.json`、`cordis.patch.yml`、`.gitignore`、`LICENSE` |
+
+约定：ESM（`.mjs` 或 `"type":"module"` 的 `.js`）、相对 import 必须带扩展名、UTF-8 无 BOM、单文件 ≤ 1000 行、不引入任何 npm 依赖、**不 import 任何 `@deepseek-ai/*` 包**（本机 profile 解析不到，会静默失败）。
+
+## 3. 规则层接口（R 实现，H 消费）
+
+`src/rules/xiangqi.mjs`：
+
+```js
+export const kind = 'xiangqi'
+export const START_FEN = 'rnbakabnr/9/1c5c1/p1p1p1p1p/9/9/P1P1P1P1P/1C5C1/9/RNBAKABNR r'
+
+// 坐标：file 0..8（Red 视角从左到右，a..i）；rank 0..9（0 = 红方底线）
+export function parseSquare(text)      // 'h2' -> {file:7, rank:2}；非法返回 null
+export function squareName({file, rank}) // -> 'h2'
+export function initialBoard()         // -> {squares: Array(90) 元素为 null 或 {type,color}, turn:'red', ply:0}
+export function toFen(board)           // 中国象棋 FEN（含行棋方）
+export function fromFen(fen)           // -> board
+export function legalMoves(board)      // -> Move[]（全部合法着法）
+export function legalMovesFrom(board, from) // -> Move[]
+export function validateMove(board, move) // -> {ok:true} | {ok:false, code, message}
+export function applyMove(board, move) // 纯函数，返回新 board（不修改入参），并 push 到 board.history？
+export function notation(board, move)  // 落子前的中文记谱：'炮二平五'（红）/ '炮8平5'（黑）
+export function statusOf(board)        // 'playing' | 'red-win' | 'black-win' | 'draw'
+export function asciiBoard(board)      // -> string[]，10 行文字棋盘（给 md / agent）
+```
+
+`Move = { from: {file,rank}, to: {file,rank}, iccs: 'h2e2', capture: boolean }`
+
+`src/rules/index.mjs`：`export function getRules(kind='xiangqi')`，返回上面这组函数与 `kind`，供未来加国际象棋。
+
+非法原因 `code`（前端与工具都要用）：`NOT_YOUR_PIECE`、`EMPTY_SQUARE`、`ILLEGAL_PATTERN`、`SELF_CHECK`、`FLYING_GENERAL`、`OUT_OF_BOARD`、`GAME_OVER`。`message` 必须是人话（例：`炮吃子必须隔一个棋子`）。
+
+## 4. 对局服务接口（H 实现，index.js/前端/工具消费）
+
+`src/host/game.mjs`：
+
+```js
+export function createGameService({ rules, minutes = 20, now = () => Date.now() })
+// 返回：
+//   newGame({ humanSide = 'red', minutes }) -> { snapshot, token, urlPath }   // token 18 位；只在此处返回明文
+//   snapshot() -> Snapshot
+//   move(input) -> { snapshot }   // input: {from,to} | {iccs} | {notation}；失败抛 GameError
+//   action(type)                  // 'undo' | 'resign' | 'draw' | 'restart'
+//   subscribe(fn) -> unsubscribe  // fn(snapshot)，每次状态变化后广播（含 SSE 与工具通知）
+//   recordMarkdown(meta) -> string
+//   verifyToken(text) -> boolean  // 常数时间比较
+//   status() -> { port?, url, tokenSet, gameId, tunnel }
+```
+
+`Snapshot`：
+```js
+{ gameId, fen, turn:'red'|'black', status:'playing'|'red-win'|'black-win'|'draw',
+  rev, moves:[{n, color, iccs, notation, at}], lastMove:{iccs,from,to}|null,
+  humanSide, agentSide, startedAt, deadline, remainingMs,
+  ascii: string[], recordMarkdown: string }
+```
+
+`GameError`：`{ code, message, status }`（HTTP 映射：400/409/410）。
+
+## 5. HTTP 服务接口（H 实现，W 消费）
+
+`src/host/server.mjs`：
+
+```js
+export async function startServer({ service, tunnel, token, port, assetsDir, preview })
+// -> { port, url, close() }
+// preview=true 时放开 token（仅供本地浏览器预览，不用于公网）
+```
+
+路由（全部同源，`content-type` 严格设置）：
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/` | 校验 `?k=`（或 cookie `xq`）→ 种 cookie + 返回 `web/index.html`；口令错 → 401 极简页 |
+| GET | `/assets/*` | 静态文件（仅 `web/` 目录内的白名单后缀：html/js/css/svg/png/ico） |
+| GET | `/api/state` | `{ok, snapshot, tunnel, invite:{url?}}` |
+| POST | `/api/move` | body `{from,to}` → 200 `{ok, snapshot}` / 409 `{ok:false,code,message}` |
+| POST | `/api/new` | body `{humanSide?, minutes?}` → 200 `{ok, snapshot, url}`（**新 token，旧 token 立即失效**） |
+| POST | `/api/action` | body `{type}` → 200 `{ok, snapshot}` |
+| GET | `/api/events` | SSE：`data: <snapshot json>\n\n`，连上先推一次当前状态，之后每次 rev 变化推一次；25s 心跳注释行 |
+| GET | `/api/record.md` | `text/markdown; charset=utf-8` |
+| GET | `/api/tunnel` | `{ok, provider, status:'stopped'|'starting'|'running'|'error', url, error}` |
+| POST | `/api/tunnel` | body `{action:'start'|'stop'|'status', provider?}` |
+
+鉴权：`/api/*` 必须带 `x-xiangqi-token`（前端从 cookie/URL 取）或 `?k=`；`POST` 还要 `content-type: application/json`（缺 → 400）。失败一律 401 `{ok:false,code:'UNAUTHORIZED'}`，**不回显 token**。
+
+## 6. 隧道管理接口（H 实现）
+
+`src/host/tunnel.mjs`：
+
+```js
+export function createTunnelManager({ config, log = () => {} })
+// -> { start(provider?), stop(), status(), onChange(fn), pickLocalPort() }
+// 状态机 stopped -> starting -> running -> stopped；stop() 只杀自己 spawn 的子进程（记 pid，按 pid 杀）
+```
+
+- 本地端口：`pickLocalPort(5000, 5050)` —— 从 5000 起扫，`net.createServer().listen()` 成功即用；全占则抛 `NO_FREE_PORT`。
+- `cloudflared`：spawn `cloudflared tunnel --no-autoupdate --url http://127.0.0.1:<port>`；从 **stderr** 匹配 `https://[a-z0-9-]+\.trycloudflare\.com`；30s 未拿到 URL 判失败；需要代理时读 `config.proxy`（默认 `http://127.0.0.1:7897`）注入 `HTTPS_PROXY`。
+- `natfrp`（SakuraFrp）：`config.natfrp = { token, tunnelId, clientPath }`，默认命令 `[clientPath, '-f', token + ':' + tunnelId]`；缺 token/tunnelId → `start()` 抛 `NOT_CONFIGURED` 并提示改用 cloudflared。URL 从 stdout/stderr 行里匹配 `https?://\S+`。
+- 二进制查找顺序：`config.binPath` → `PATH` 里的 `cloudflared`/`frpc` → `O:\clawwork\chuansongmen\tunnel\bin\cloudflared.exe`（存在才用）。
+- 本地配置：`src/host/config.mjs` 读 `xiangqi.config.json`（查找顺序：`$XQ_CONFIG` → `$DSH_HOME/plugins-data/xiangqi/config.json` → 仓库根 `xiangqi.config.json`，都 gitignore），env 覆盖：`XQ_TOKEN`、`XQ_PORT`、`XQ_MINUTES`、`XQ_NATFRP_TOKEN`、`XQ_NATFRP_TUNNEL`、`XQ_CLOUDFLARED`、`XQ_PROXY`、`XQ_DATA_DIR`。
+
+## 7. DSH 插件入口（H 实现）
+
+`index.js`：`export const name = 'xiangqi'`、`export const inject = ['tools']`、`export function apply(ctx)`。要点：
+
+- 起服务与规则服务，注册工具，`ctx.effect(() => () => { server.close(); tunnel.stop() })`。
+- **不要 import 任何 `@deepseek-ai/*`**；工具直接 `ctx.tools.register({...})` 传普通对象，形状：
+  `{ name, description, parameters: <DSH 方言对象>, output: { schema, render(a,v) }, async execute(args, exec) }`（`render` 返回 `[{type:'text',text}]`）。
+- 工具清单（名字固定，前端/文档/测试都用这套）：
+
+| 工具 | 参数 | 行为 |
+|---|---|---|
+| `xiangqi_new_game` | `{ humanSide?: 'red'|'black', minutes?: number }` | 新建单局，返回邀请 URL（含 18 位口令）+ 谁先走 |
+| `xiangqi_board` | `{}` | 返回文字棋盘 + FEN + 轮到谁 + 剩余时间 + 最近一手 + 棋谱 |
+| `xiangqi_move` | `{ move: string }` | 接受 `h2e2` / `h2-e2` / `炮二平五`；非法时返回人话原因（不抛给模型栈） |
+| `xiangqi_wait` | `{ timeoutMs?: number, sinceRev?: number }` | 长等到人类走子或超时（上限 120000），返回新局面 |
+| `xiangqi_record` | `{}` | 返回 Markdown 记谱全文（同时落盘到数据目录 `games/<gameId>.md`） |
+| `xiangqi_tunnel` | `{ action: 'start'|'stop'|'status', provider?: 'cloudflared'|'natfrp' }` | 开/关/查隧道，返回公网 URL |
+| `xiangqi_status` | `{}` | 站点地址、口令是否就绪、隧道状态、剩余时间 |
+
+## 8. 记谱 Markdown 格式（R 实现 `renderRecordMd`）
+
+```markdown
+# 象棋对局 xq-20261102-1a2b · 红方：人类 · 黑方：agent
+
+- 状态：进行中 · 轮到：黑方 · 剩余：18:42
+- FEN：`rnbakabnr/9/1c5c1/p1p1p1p1p/9/9/P1P1P1P1P/1C5C1/9/RNBAKABNR b`
+- 最近一手：炮二平五（h2e2）
+
+## 棋盘
+
+（10 行文字棋盘，红方在下，用 车马相仕帅仕相马车 / 卒炮 等汉字；空位用 ·）
+
+## 着法
+
+| 回合 | 红方 | 黑方 |
+|---:|---|---|
+| 1 | 炮二平五 | 马8进7 |
+
+## 给 agent 的下一步（可直接复制）
+
+- 拉当前局面：`GET <base>/api/state`，头 `x-xiangqi-token: <token>`
+- 走子：`POST <base>/api/move`，body `{"from":"h2","to":"e2"}`
+- 记谱：`GET <base>/api/record.md`
+```
+
+> 口令永远不写进落盘的 md（写 `<token>` 占位）；md 会随 `xiangqi_record` 返回并被大模型看到，属于「脱敏」要求。
+
+## 9. 前端要求（W 实现）
+
+- 纯静态三件套 + 原生 ES module，无构建、无 CDN、无字体外链（棋子在 CSS 里用 `serif` 字体族）。
+- 棋盘：SVG 线格 + 楚河汉界 + 炮/兵位标记；棋子圆形、有立体感（渐变 + 内阴影），红黑双色可辨；点击选子 → 高亮合法落点（服务端 `legalMovesFrom` 可经 `/api/state` 携带或前端本地算——**前端不实现规则，全部以服务端返回为准**：`GET /api/state` 返回 `legal` 字段，见下）。
+- 交互：点选/拖拽均可；非法走子必须弹出**人话错误**（用服务端 `message`），并让棋子抖动回弹。
+- 顶部（手机在上方）：轮到谁（红/黑 + 「你」标记）+ 倒计时 `mm:ss`（≤60s 变红闪烁）。
+- 底部（手机在下方）：棋谱列表（`1. 炮二平五  马8进7` 两列），自动滚动；桌面端放侧栏。
+- 控制区：新局、悔棋、认输、导出记谱（下载 `.md`）、穿透开关（显示公网 URL + 复制按钮 + 状态点）。
+- 结束态：覆盖层显示胜负原因（将死/超时/认输/和棋），提供「再来一局」。
+- 无障碍/健壮：无 JS 时报错文本；SSE 断线自动重连（指数退避）；所有 DOM 更新走文本节点，不 `innerHTML` 拼接用户数据。
+- **`/api/state` 额外返回 `legal`**：`LegalityIndex = { "<fromSquare>": ["<toSquare>", ...] }`，由服务端用 `legalMoves` 全量生成，前端只做展示。
+
+## 10. 验收（Lead 执行，施工者自测后再交）
+
+1. `npm test`（`node --test`）全绿：规则合法/非法、记谱格式、服务鉴权与 409、隧道端口选择与 mock provider。
+2. `node scripts/dev-server.mjs` 起站，`curl "http://127.0.0.1:<port>/?k=<token>"` 返回页面；错 token 401。
+3. 对局脚本：`POST /api/new` → 连走 6 步（含 2 次非法）→ `GET /api/record.md` 含 12 行着法表；20 分钟超时用注入时钟测。
+4. 前端：真实浏览器打开移动端视口（390×844），上方时间/轮次、下方棋谱、点选走子、非法报错、结束覆盖层各截一张图。
+5. DSH 冒烟：`dsh --profile web --patch <临时 overlay> --help` 能加载插件不报错（端口绑定在 `--help` 下不得阻塞退出）。
+6. 隧道：`cloudflared` 起 → 拿到 `https://*.trycloudflare.com` → 从本机 `curl` 该 URL 的 `/api/state` 通 → stop 后端口与子进程都消失。
+
+## 11. 脱敏红线（评审重点）
+
+- 仓库内**绝不出现**：真实公网 IP/域名、natfrp 访问密钥、隧道 URL、token 明文、本机绝对路径（`C:\Users\...`、`O:\clawwork\...`）、用户名 `thatg`。
+- 邀请 URL 里的 token 只在运行时产生；`README`/示例一律 `<token>`、`127.0.0.1:5000`、`https://example.trycloudflare.com`。
+- `.gitignore` 至少覆盖：`xiangqi.config.json`、`.data/`、`games/`、`*.log`、`node_modules/`、`.env*`。

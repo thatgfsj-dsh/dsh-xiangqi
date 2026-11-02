@@ -1,0 +1,50 @@
+{
+  "name": "dsh-xiangqi",
+  "version": "0.1.0",
+  "description": "DSH 象棋对弈插件：独立对弈网站 + agent 走子工具 + 一键内网穿透 + Markdown 记谱",
+  "type": "module",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./package.json": "./package.json"
+  },
+  "license": "MIT",
+  "engines": {
+    "dsh": ">=0.2.1-rc.2 <0.3.0-0",
+    "node": ">=22"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "files": [
+    "index.js",
+    "src",
+    "web",
+    "scripts",
+    "docs",
+    "cordis.patch.yml",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "test": "node --test",
+    "dev": "node scripts/dev-server.mjs",
+    "check": "node scripts/check-web.mjs"
+  },
+  "keywords": [
+    "deepseek-harness",
+    "dsh-plugin",
+    "xiangqi",
+    "chess"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/thatgfsj-dsh/dsh-xiangqi.git"
+  },
+  "homepage": "https://github.com/thatgfsj-dsh/dsh-xiangqi",
+  "bugs": {
+    "url": "https://github.com/thatgfsj-dsh/dsh-xiangqi/issues"
+  }
+}

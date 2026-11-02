@@ -1,0 +1,9 @@
+node_modules/
+xiangqi.config.json
+.env
+.env.*
+.data/
+games/
+*.log
+*.tmp
+.DS_Store

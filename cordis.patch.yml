@@ -1,0 +1,4 @@
+# 挂载宿主半边：id = name = 包名。
+- insert:
+    - id: xiangqi
+      name: dsh-xiangqi
