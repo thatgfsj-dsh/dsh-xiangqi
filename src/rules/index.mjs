@@ -48,5 +48,18 @@ export function legalIndex(board) {
   return index
 }
 
+/**
+ * 走子后的招数标签（将军 / 将军抽车 / 将死 / 吃车 / 捉双 / 应将 / 过河 / 双将）。
+ * @returns {string[]}
+ */
+export function moveTags(board, move) {
+  if (typeof xiangqi.moveTags !== 'function') return []
+  try {
+    return xiangqi.moveTags(board, move) || []
+  } catch {
+    return []
+  }
+}
+
 export { xiangqi }
-export default { getRules, supportedKinds, findMoveByNotation, legalIndex }
+export default { getRules, supportedKinds, findMoveByNotation, legalIndex, moveTags }

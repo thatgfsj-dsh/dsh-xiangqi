@@ -577,3 +577,112 @@ export function legalTargets(board, squareText) {
   if (!square) return []
   return legalMovesFrom(board, square).map((move) => squareName(move.to))
 }
+
+/** 某方所有棋子（伪合法着法）能攻击到的方格名集合。 */
+export function attackedSquares(board, color) {
+  const squares = new Set()
+  for (let rank = 0; rank <= 9; rank += 1) {
+    for (let file = 0; file <= 8; file += 1) {
+      const piece = at(board, file, rank)
+      if (!piece || piece.color !== color) continue
+      for (const move of pseudoMovesFrom(board, { file, rank })) {
+        const name = squareName(move.to)
+        if (name) squares.add(name)
+      }
+    }
+  }
+  return squares
+}
+
+/** 有多少枚棋子正在攻击某方将/帅（只看伪合法着法）。 */
+export function countKingAttackers(board, color) {
+  const king = findKing(board, color)
+  if (!king) return 0
+  const enemy = other(color)
+  const kingName = squareName(king)
+  let count = 0
+  for (let rank = 0; rank <= 9; rank += 1) {
+    for (let file = 0; file <= 8; file += 1) {
+      const piece = at(board, file, rank)
+      if (!piece || piece.color !== enemy) continue
+      const hits = pseudoMovesFrom(board, { file, rank }).some((move) => squareName(move.to) === kingName)
+      if (hits) count += 1
+    }
+  }
+  return count
+}
+
+/** 可被「抽」的高价值子力类型（车最高，其次炮/马）。 */
+const HEAVY_TYPES = new Set(['c', 'n'])
+
+function enemySquaresOfType(board, color, types) {
+  const out = []
+  for (let rank = 0; rank <= 9; rank += 1) {
+    for (let file = 0; file <= 8; file += 1) {
+      const piece = at(board, file, rank)
+      if (piece && piece.color === color && types.has(piece.type)) out.push({ file, rank, type: piece.type })
+    }
+  }
+  return out
+}
+
+/** 走子后的「招数标签」，给界面与 agent 共用（如 ['吃车','将军抽车']）。 */
+export function moveTags(board, input) {
+  const verdict = validateMove(board, input)
+  if (!verdict || verdict.ok !== true) return []
+  const move = verdict.move
+  const mover = board.turn
+  const enemy = other(mover)
+  const next = applyMove(board, move)
+  const tags = []
+
+  const captured = at(board, move.to.file, move.to.rank)
+  if (captured) tags.push(`吃${PIECE_NAMES[enemy][captured.type]}`)
+
+  const piece = at(board, move.from.file, move.from.rank)
+  if (piece && piece.type === 'p' && !crossedRiver(mover, move.from.rank) && crossedRiver(mover, move.to.rank)) {
+    tags.push(mover === 'red' ? '兵过河' : '卒过河')
+  }
+
+  if (isKingAttacked(board, mover)) tags.push('应将')
+
+  const givingCheck = isKingAttacked(next, enemy)
+  if (givingCheck) {
+    const mate = legalMoves(next).length === 0
+    if (mate) {
+      tags.push('将死')
+    } else {
+      const attackers = countKingAttackers(next, enemy)
+      const attacks = attackedSquares(next, mover)
+      const rookAttacked = enemySquaresOfType(next, enemy, new Set(['r'])).some(({ file, rank }) =>
+        attacks.has(squareName({ file, rank })),
+      )
+      const heavyAttacked = enemySquaresOfType(next, enemy, HEAVY_TYPES).some(({ file, rank }) =>
+        attacks.has(squareName({ file, rank })),
+      )
+      if (attackers >= 2) tags.push('双将')
+      else if (rookAttacked) tags.push('将军抽车')
+      else if (heavyAttacked) tags.push('将军抽子')
+      else tags.push('将军')
+    }
+  } else {
+    // 捉双：某一枚己方棋子同时攻击两枚以上对方高价值子（车/炮/马）
+    const attacks = attackedSquares(next, mover)
+    const valuable = enemySquaresOfType(next, enemy, new Set(['r', 'c', 'n']))
+    let fork = false
+    for (let rank = 0; rank <= 9 && !fork; rank += 1) {
+      for (let file = 0; file <= 8 && !fork; file += 1) {
+        const own = at(next, file, rank)
+        if (!own || own.color !== mover) continue
+        const hits = valuable.filter(({ file: tf, rank: tr }) => {
+          const name = squareName({ file: tf, rank: tr })
+          return pseudoMovesFrom(next, { file, rank }).some((candidate) => squareName(candidate.to) === name)
+        })
+        if (hits.length >= 2) fork = true
+      }
+    }
+    if (fork) tags.push('捉双')
+  }
+
+  return tags
+}

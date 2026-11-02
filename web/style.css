@@ -476,6 +476,16 @@ select {
   opacity: 0.42;
   cursor: default;
 }
+.btn--icon {
+  flex: 0 0 auto;
+  min-width: 42px;
+  padding: 8px 4px;
+  font-size: 15px;
+  line-height: 1;
+}
+.btn--icon[aria-pressed='false'] {
+  opacity: 0.5;
+}
 .btn--primary {
   background: linear-gradient(180deg, #eab571, #d99a4d);
   border-color: rgba(255, 226, 180, 0.55);
@@ -588,6 +598,33 @@ select {
 }
 .record-black {
   color: #ded5c6;
+}
+/* 招数徽标：将军抽车 / 将死 / 吃车 … */
+.record-tag {
+  display: inline-block;
+  margin-left: 5px;
+  padding: 1px 5px;
+  border-radius: 999px;
+  font-size: 10px;
+  line-height: 1.5;
+  letter-spacing: 0;
+  color: #f4d9a8;
+  background: rgba(255, 214, 140, 0.16);
+  border: 1px solid rgba(255, 214, 140, 0.22);
+  vertical-align: 1px;
+}
+.record-tag--check {
+  color: #ffb3a3;
+  background: rgba(255, 96, 80, 0.18);
+  border-color: rgba(255, 96, 80, 0.34);
+  animation: tag-pop 0.34s ease-out;
+}
+@keyframes tag-pop {
+  from { transform: scale(0.7); opacity: 0; }
+  to { transform: scale(1); opacity: 1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .record-tag--check { animation: none; }
 }
 .record-empty {
   margin: 8px 6px 4px;
