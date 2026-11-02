@@ -32,7 +32,6 @@
       <button class="btn" id="btn-resign" type="button">认输</button>
       <button class="btn" id="btn-record" type="button">记谱</button>
       <button class="btn btn--icon" id="btn-sound" type="button" aria-pressed="true" title="音效：开（点击关闭）" aria-label="音效开关">🔊</button>
-      <button class="btn" id="btn-tunnel" type="button" aria-expanded="false">穿透</button>
     </div>
 
     <section class="record" id="record-panel" aria-label="棋谱">
@@ -44,23 +43,6 @@
         <ol class="record-list" id="record-list"></ol>
         <p class="record-empty" id="record-empty">还没有着法。红先，点自己的棋子开始。</p>
       </div>
-    </section>
-
-    <section class="tunnel" id="tunnel-panel" aria-label="内网穿透">
-      <div class="tunnel-row">
-        <span class="dot dot--tunnel" id="tunnel-dot" aria-hidden="true"></span>
-        <span class="tunnel-status" id="tunnel-status">穿透未开启</span>
-        <select class="select" id="tunnel-provider" aria-label="穿透提供方">
-          <option value="cloudflared">cloudflared</option>
-          <option value="natfrp">natfrp</option>
-        </select>
-        <button class="btn btn--small" id="btn-tunnel-toggle" type="button">开启</button>
-      </div>
-      <div class="tunnel-url-row" id="tunnel-url-row" hidden>
-        <code class="tunnel-url" id="tunnel-url"></code>
-        <button class="btn btn--small" id="btn-copy" type="button">复制</button>
-      </div>
-      <p class="tunnel-hint" id="tunnel-hint">未开启。点「开启」由插件拉起 cloudflared quick tunnel，或在 DSH 里让 agent 执行 xiangqi_tunnel start。</p>
     </section>
 
   </aside>

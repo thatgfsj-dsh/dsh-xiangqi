@@ -95,10 +95,11 @@ export function createSoundKit(options = {}) {
     src.stop(t0 + decay + 0.02)
   }
 
-  // 木质落子声：低频"咚" + 带通噪声"嗒"
-  function playClack({ pitch = 170, bright = 1300, volume = 0.55 } = {}) {
-    tone({ freq: pitch, endFreq: pitch * 0.62, decay: 0.075, peak: volume * 0.7 })
-    noiseBurst({ freq: bright, decay: 0.03, peak: volume * 0.5 })
+  // 清脆的落子声：极短的木质"嗒" + 高频噪声"啪" + 一点金属亮音（不要低频闷响）
+  function playClack({ pitch = 210, bright = 3200, volume = 0.5 } = {}) {
+    tone({ freq: pitch * 1.7, endFreq: pitch, decay: 0.03, peak: volume * 0.45, type: 'triangle' })
+    tone({ freq: 2680, decay: 0.012, peak: volume * 0.16, type: 'square' })
+    noiseBurst({ freq: bright, decay: 0.016, peak: volume * 0.55, q: 3.4 })
   }
 
   /**
@@ -109,14 +110,18 @@ export function createSoundKit(options = {}) {
     if (!enabled) return
     const agent = detail.side === 'agent'
     if (detail.capture) {
-      // 吃子：先一声脆裂，再一记闷响
-      noiseBurst({ freq: 2400, decay: 0.045, peak: 0.4 })
-      playClack({ pitch: agent ? 200 : 165, bright: 1800, volume: 0.6 })
-      tone({ freq: 110, endFreq: 62, decay: 0.11, peak: 0.35, delay: 0.02 })
+      // 吃子：一声高频脆裂 + 落子声 + 极短闷响
+      noiseBurst({ freq: 4400, decay: 0.022, peak: 0.42, q: 2.2 })
+      playClack({ pitch: agent ? 240 : 205, bright: 3600, volume: 0.58 })
+      tone({ freq: 150, endFreq: 90, decay: 0.05, peak: 0.3, delay: 0.008 })
       return
     }
-    // agent 落子更清脆（高一点），人类落子更沉（低一点）
-    playClack(agent ? { pitch: 205, bright: 1650, volume: 0.5 } : { pitch: 160, bright: 1250, volume: 0.52 })
+    // agent 落子更亮、更高一点；人类落子稍低，但都保持清脆
+    playClack(
+      agent
+        ? { pitch: 248, bright: 3700, volume: 0.5 }
+        : { pitch: 205, bright: 3050, volume: 0.52 },
+    )
   }
 
   /**

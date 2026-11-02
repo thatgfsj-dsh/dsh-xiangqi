@@ -224,6 +224,9 @@ export async function startServer({
   let actualPort = 0
   let closed = false
   const sseClients = new Set()
+// 长轮询等待者：{ req, res, gameId, rev, timer, onClose }。
+// 这是前端「动态刷新」的主通道：HTTP 长轮询比 SSE 更抗代理缓冲/中断，公网隧道下也稳。
+const waiters = new Set()
 
   const localBaseUrl = () => `http://127.0.0.1:${actualPort}`
 
@@ -394,6 +397,11 @@ export async function startServer({
   }
 
   const unsubscribe = service.subscribe((snapshot) => {
+    for (const waiting of [...waiters]) {
+      if (snapshot.gameId !== waiting.gameId || snapshot.rev !== waiting.rev) {
+        finishWaiter(waiting, snapshot)
+      }
+    }
     for (const client of [...sseClients]) {
       // 口令轮换后旧连接立即失效（与 DESIGN「旧 token 立即失效」一致）；
       // 但浏览器会话 cookie 进来的连接不受口令轮换影响，保证页面换局后仍能自动更新。
@@ -427,6 +435,68 @@ export async function startServer({
     }
   }, SSE_HEARTBEAT_MS)
   if (typeof heartbeat.unref === 'function') heartbeat.unref()
+
+  // ---- 动态刷新：统一状态载荷 + 长轮询 ----
+  // 一次响应里同时给 snapshot 与 legal，前端原子应用，不做「先渲染再补拉」的补丁式刷新。
+  function buildStatePayload(snapshot) {
+    const snap = snapshot || service.snapshot()
+    return {
+      ok: true,
+      snapshot: snap,
+      legal: typeof service.legalIndex === 'function' ? service.legalIndex() : {},
+    }
+  }
+
+  /** 结束一个长轮询等待者并回包；snapshot 为空表示超时（回当前最新态）。 */
+  function finishWaiter(waiter, snapshot) {
+    if (!waiters.delete(waiter)) return
+    if (waiter.timer) clearTimeout(waiter.timer)
+    if (typeof waiter.req.removeListener === 'function') {
+      waiter.req.removeListener('close', waiter.onClose)
+      waiter.req.removeListener('error', waiter.onClose)
+    }
+    try {
+      sendJson(waiter.res, 200, buildStatePayload(snapshot))
+    } catch {
+      /* 客户端已断开 */
+    }
+  }
+
+  /**
+   * GET /api/wait?since=<rev>&timeout=<ms>：长轮询动态刷新。
+   * - since 与当前 rev 不同（含首次无 since）→ 立即返回；
+   * - 否则挂起，直到局面变化（rev 或 gameId）或超时（默认 25s，上限 30s），超时也返回当前态。
+   */
+  function handleWait(req, res, url) {
+    let current
+    try {
+      current = service.snapshot()
+    } catch (error) {
+      handleGameError(res, error)
+      return
+    }
+    const sinceText = url.searchParams.get('since')
+    const sinceRev = sinceText === null ? null : Number(sinceText)
+    const timeoutRaw = Number(url.searchParams.get('timeout'))
+    const timeoutMs = Number.isFinite(timeoutRaw) && timeoutRaw > 0 ? Math.min(timeoutRaw, 30000) : 25000
+    if (sinceRev === null || !Number.isFinite(sinceRev) || current.rev !== sinceRev) {
+      sendJson(res, 200, buildStatePayload(current))
+      return
+    }
+    if (waiters.size >= MAX_SSE_CLIENTS) {
+      sendJson(res, 200, buildStatePayload(current))
+      return
+    }
+    const waiter = { req, res, gameId: current.gameId, rev: current.rev, timer: null, onClose: null }
+    waiter.onClose = () => {
+      if (waiters.delete(waiter) && waiter.timer) clearTimeout(waiter.timer)
+    }
+    req.on('close', waiter.onClose)
+    req.on('error', waiter.onClose)
+    waiter.timer = setTimeout(() => finishWaiter(waiter, null), timeoutMs)
+    if (typeof waiter.timer.unref === 'function') waiter.timer.unref()
+    waiters.add(waiter)
+  }
 
   async function handleRequest(req, res) {
     let url
@@ -486,6 +556,11 @@ export async function startServer({
     if (!requireAuth(req, res, url)) return
 
     try {
+      if (pathname === '/api/wait' && method === 'GET') {
+        handleWait(req, res, url)
+        return
+      }
+
       if (pathname === '/api/state' && method === 'GET') {
         const snapshot = service.snapshot()
         const legal = typeof service.legalIndex === 'function' ? service.legalIndex() : {}
@@ -493,7 +568,7 @@ export async function startServer({
         const invite = knownToken
           ? { url: `${currentBaseUrl()}/?k=${knownToken}`, tokenSet: true }
           : { url: null, tokenSet: Boolean(snapshot) }
-        sendJson(res, 200, { ok: true, snapshot, tunnel: tStatus, invite, legal })
+        sendJson(res, 200, { ...buildStatePayload(snapshot), legal, tunnel: tStatus, invite })
         return
       }
 
@@ -501,7 +576,7 @@ export async function startServer({
         if (!requireJson(req, res)) return
         const body = await readJson(req)
         const result = service.move(body)
-        sendJson(res, 200, { ok: true, snapshot: result.snapshot })
+        sendJson(res, 200, buildStatePayload(result.snapshot))
         return
       }
 
@@ -519,8 +594,7 @@ export async function startServer({
           res,
           200,
           {
-            ok: true,
-            snapshot: created.snapshot,
+            ...buildStatePayload(created.snapshot),
             url: `${currentBaseUrl()}${created.urlPath}`,
           },
           { 'Set-Cookie': [cookieHeader(created.token), pageSessionCookie(req)] },
@@ -532,7 +606,7 @@ export async function startServer({
         if (!requireJson(req, res)) return
         const body = await readJson(req)
         const result = service.action(body.type)
-        const payload = { ok: true, snapshot: result.snapshot }
+        const payload = buildStatePayload(result.snapshot)
         const headers = {}
         if (result.token) {
           knownToken = result.token
@@ -662,6 +736,19 @@ export async function startServer({
         }
       }
       sseClients.clear()
+      for (const waiting of [...waiters]) {
+        if (waiting.timer) clearTimeout(waiting.timer)
+        if (typeof waiting.req.removeListener === 'function') {
+          waiting.req.removeListener('close', waiting.onClose)
+          waiting.req.removeListener('error', waiting.onClose)
+        }
+        try {
+          waiting.res.end()
+        } catch {
+          /* 忽略 */
+        }
+      }
+      waiters.clear()
       return new Promise((resolvePromise) => {
         server.close(() => resolvePromise())
       })
