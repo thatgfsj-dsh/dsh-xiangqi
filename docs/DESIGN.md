@@ -122,7 +122,7 @@ export function createTunnelManager({ config, log = () => {} })
 - 本地端口：`pickLocalPort(5000, 5050)` —— 从 5000 起扫，`net.createServer().listen()` 成功即用；全占则抛 `NO_FREE_PORT`。
 - `cloudflared`：spawn `cloudflared tunnel --no-autoupdate --url http://127.0.0.1:<port>`；从 **stderr** 匹配 `https://[a-z0-9-]+\.trycloudflare\.com`；30s 未拿到 URL 判失败；需要代理时读 `config.proxy`（默认 `http://127.0.0.1:7897`）注入 `HTTPS_PROXY`。
 - `natfrp`（SakuraFrp）：`config.natfrp = { token, tunnelId, clientPath }`，默认命令 `[clientPath, '-f', token + ':' + tunnelId]`；缺 token/tunnelId → `start()` 抛 `NOT_CONFIGURED` 并提示改用 cloudflared。URL 从 stdout/stderr 行里匹配 `https?://\S+`。
-- 二进制查找顺序：`config.binPath` → `PATH` 里的 `cloudflared`/`frpc` → `O:\clawwork\chuansongmen\tunnel\bin\cloudflared.exe`（存在才用）。
+- 二进制查找顺序：`config.binPath` → `PATH` 里的 `cloudflared`/`frpc` → 仓库同级 `tunnel/bin/cloudflared.exe`（存在才用，不写死绝对路径）。
 - 本地配置：`src/host/config.mjs` 读 `xiangqi.config.json`（查找顺序：`$XQ_CONFIG` → `$DSH_HOME/plugins-data/xiangqi/config.json` → 仓库根 `xiangqi.config.json`，都 gitignore），env 覆盖：`XQ_TOKEN`、`XQ_PORT`、`XQ_MINUTES`、`XQ_NATFRP_TOKEN`、`XQ_NATFRP_TUNNEL`、`XQ_CLOUDFLARED`、`XQ_PROXY`、`XQ_DATA_DIR`。
 
 ## 7. DSH 插件入口（H 实现）
@@ -195,6 +195,6 @@ export function createTunnelManager({ config, log = () => {} })
 
 ## 11. 脱敏红线（评审重点）
 
-- 仓库内**绝不出现**：真实公网 IP/域名、natfrp 访问密钥、隧道 URL、token 明文、本机绝对路径（`C:\Users\...`、`O:\clawwork\...`）、用户名 `thatg`。
+- 仓库内**绝不出现**：真实公网 IP/域名、natfrp 访问密钥、隧道 URL、token 明文、本机绝对路径（用户目录或工作盘下的真实路径）、本机用户名。
 - 邀请 URL 里的 token 只在运行时产生；`README`/示例一律 `<token>`、`127.0.0.1:5000`、`https://example.trycloudflare.com`。
 - `.gitignore` 至少覆盖：`xiangqi.config.json`、`.data/`、`games/`、`*.log`、`node_modules/`、`.env*`。
