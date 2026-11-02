@@ -124,6 +124,8 @@ agent 和你在同一局里，但**各走各的**：
 | 公网地址返回 Cloudflare **502 Bad Gateway**，本机却正常 | 隧道端口与站点端口不一致（常见：站点在 61350，隧道却指向 5000）。调 `xiangqi_status` 对比「站点地址端口」和隧道「本地端口」；升级到 0.1.1 并重启 DSH，再 `xiangqi_tunnel stop/start`。**不要**手动起 cloudflared 绕过插件（status 看不到、stop 杀不掉） |
 | 打开链接是 530 / 1033 之类的边缘错误 | 隧道进程已经死了（quick tunnel 域名随之失效）。`xiangqi_tunnel start` 重新开，并把新地址发给对方 |
 | 手机打不开 `127.0.0.1` 链接 | 那是本机地址。先开穿透，用公网地址 + `/?k=<token>` 访问 |
+| agent 换了一局，我这页就不刷新了 | 0.1.2 起页面会拿到 `xq_sid` 会话 cookie，换局只作废旧口令，同一浏览器会自动跟随新局；仍是老页面就按一次 F5，或直接用 agent 发的新链接 |
+| 前端点「穿透 / 开启」报错 `隧道进程已退出（code=1）` | 多因 cloudflared 的 metrics 端口 20241 被历史进程占用（0.1.2 起已改成 20500-20600 自动挑口）。先确认有没有残留 cloudflared，`xiangqi_tunnel stop` 后用 `xiangqi_tunnel start` 重开 |
 
 ---
 

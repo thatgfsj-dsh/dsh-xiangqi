@@ -51,6 +51,11 @@ test('隧道使用调用方传入的真实端口（不是 config.port / 重新�
       !argv.includes('http://127.0.0.1:5000'),
       '不得回退到 config.port 或重新挑选的端口',
     )
+    // metrics 端口必须避开默认 20241，避免多实例互抢（抢不到会直接退出 code=1）
+    const metricsIndex = argv.indexOf('--metrics')
+    assert.ok(metricsIndex >= 0, '应显式指定 --metrics')
+    const metricsTarget = argv[metricsIndex + 1]
+    assert.match(metricsTarget, /^127\.0\.0\.1:20[5-6]\d\d$/, `metrics 端口应在 20500-20600，实际 ${metricsTarget}`)
   } finally {
     await manager.stop()
   }

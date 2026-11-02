@@ -10,7 +10,7 @@
 import { readFile } from 'node:fs/promises'
 import { createServer } from 'node:http'
 import { extname, resolve, sep } from 'node:path'
-import { timingSafeEqual } from 'node:crypto'
+import { randomBytes, timingSafeEqual } from 'node:crypto'
 
 const ASSET_SUFFIXES = new Set(['.html', '.js', '.mjs', '.css', '.svg', '.png', '.ico'])
 const CONTENT_TYPES = {
@@ -94,6 +94,39 @@ function sendText(res, status, text, contentType = 'text/plain; charset=utf-8', 
 
 function cookieHeader(token) {
   return `xq=${token}; HttpOnly; SameSite=Lax; Path=/`
+}
+
+// 浏览器会话 cookie：与「邀请口令」解耦。
+// 页面用 ?k= 成功进来一次后，发一个猜不到的 xq_sid；之后 agent 换局/轮换口令，
+// 同一个浏览器仍能拉状态、重连 SSE（否则口令一换，页面就永远 401、看起来"不再自动更新"）。
+const SESSION_COOKIE = 'xq_sid'
+const SESSION_TTL_MS = 12 * 60 * 60 * 1000
+const pageSessions = new Map()
+
+function issuePageSession() {
+  const sid = randomBytes(18).toString('base64url')
+  pageSessions.set(sid, Date.now() + SESSION_TTL_MS)
+  return sid
+}
+
+function pageSessionValid(req) {
+  const sid = parseCookies(req.headers.cookie)[SESSION_COOKIE]
+  if (!sid) return false
+  const expiresAt = pageSessions.get(sid)
+  if (!expiresAt) return false
+  if (expiresAt < Date.now()) {
+    pageSessions.delete(sid)
+    return false
+  }
+  return true
+}
+
+/** 复用已有 sid（续期），否则新发一个；返回 Set-Cookie 字符串。 */
+function pageSessionCookie(req) {
+  const existing = parseCookies(req.headers.cookie)[SESSION_COOKIE]
+  const sid = existing && pageSessions.has(existing) ? existing : issuePageSession()
+  pageSessions.set(sid, Date.now() + SESSION_TTL_MS)
+  return `${SESSION_COOKIE}=${sid}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${Math.floor(SESSION_TTL_MS / 1000)}`
 }
 
 function readBody(req) {
@@ -246,6 +279,7 @@ export async function startServer({
         return true
       }
     }
+    if (pageSessionValid(req)) return true
     return false
   }
 
@@ -334,7 +368,7 @@ export async function startServer({
       'X-Accel-Buffering': 'no',
     })
     if (typeof res.flushHeaders === 'function') res.flushHeaders()
-    const client = { res, lastKey: '', tokenAtConnect: knownToken }
+    const client = { res, lastKey: '', tokenAtConnect: knownToken, authBySession: pageSessionValid(req) }
     sseClients.add(client)
     try {
       const snapshot = service.snapshot()
@@ -361,8 +395,9 @@ export async function startServer({
 
   const unsubscribe = service.subscribe((snapshot) => {
     for (const client of [...sseClients]) {
-      // 口令轮换后旧连接立即失效（与 DESIGN「旧 token 立即失效」一致）
-      if (knownToken && client.tokenAtConnect !== knownToken) {
+      // 口令轮换后旧连接立即失效（与 DESIGN「旧 token 立即失效」一致）；
+      // 但浏览器会话 cookie 进来的连接不受口令轮换影响，保证页面换局后仍能自动更新。
+      if (!client.authBySession && knownToken && client.tokenAtConnect !== knownToken) {
         sseClients.delete(client)
         try {
           client.res.end()
@@ -412,28 +447,23 @@ export async function startServer({
       }
       const queryToken = url.searchParams.get('k')
       const cookieToken = parseCookies(req.headers.cookie).xq
-      let valid = preview
-      let setCookie = null
+      let tokenValid = false
       if (typeof service.verifyToken === 'function') {
-        if (queryToken && service.verifyToken(queryToken)) {
-          valid = true
-          setCookie = cookieHeader(queryToken)
-        } else if (cookieToken && service.verifyToken(cookieToken)) {
-          valid = true
-        }
+        if (queryToken && service.verifyToken(queryToken)) tokenValid = true
+        else if (cookieToken && service.verifyToken(cookieToken)) tokenValid = true
       } else if (knownToken) {
-        if (queryToken && constantEqual(queryToken, knownToken)) {
-          valid = true
-          setCookie = cookieHeader(queryToken)
-        } else if (cookieToken && constantEqual(cookieToken, knownToken)) {
-          valid = true
-        }
+        if (queryToken && constantEqual(queryToken, knownToken)) tokenValid = true
+        else if (cookieToken && constantEqual(cookieToken, knownToken)) tokenValid = true
       }
+      const valid = preview || tokenValid || pageSessionValid(req)
       if (!valid) {
         sendText(res, 401, MINIMAL_401, 'text/html; charset=utf-8', { 'Cache-Control': 'no-store' })
         return
       }
-      sendPage(res, { setCookie })
+      // 通过校验后才发会话 cookie；口令 cookie 仅在本次带对了 ?k= 时刷新
+      const cookies = [pageSessionCookie(req)]
+      if (tokenValid && queryToken) cookies.push(cookieHeader(queryToken))
+      sendPage(res, { setCookie: cookies })
       return
     }
 
@@ -493,7 +523,7 @@ export async function startServer({
             snapshot: created.snapshot,
             url: `${currentBaseUrl()}${created.urlPath}`,
           },
-          { 'Set-Cookie': cookieHeader(created.token) },
+          { 'Set-Cookie': [cookieHeader(created.token), pageSessionCookie(req)] },
         )
         return
       }
@@ -507,7 +537,9 @@ export async function startServer({
         if (result.token) {
           knownToken = result.token
           payload.url = `${currentBaseUrl()}${result.urlPath}`
-          headers['Set-Cookie'] = cookieHeader(result.token)
+          headers['Set-Cookie'] = [cookieHeader(result.token), pageSessionCookie(req)]
+        } else {
+          headers['Set-Cookie'] = pageSessionCookie(req)
         }
         sendJson(res, 200, payload, headers)
         return

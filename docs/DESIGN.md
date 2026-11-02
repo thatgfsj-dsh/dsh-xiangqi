@@ -109,6 +109,8 @@ export async function startServer({ service, tunnel, token, port, assetsDir, pre
 
 鉴权：`/api/*` 必须带 `x-xiangqi-token`（前端从 cookie/URL 取）或 `?k=`；`POST` 还要 `content-type: application/json`（缺 → 400）。失败一律 401 `{ok:false,code:'UNAUTHORIZED'}`，**不回显 token**。
 
+**浏览器会话 cookie（0.1.2 起，修复「换局后页面不再自动更新」）**：`GET /` 通过校验后除口令 cookie `xq` 外再发一个 HttpOnly 的 `xq_sid`（随机 24 字符，服务进程内保存，TTL 12h）。此后的 `/api/*` 与 SSE 同时接受「当前口令」或「有效 `xq_sid`」。口令轮换只让**旧口令**失效（401），不再把同一个浏览器踢下线；SSE 连接按 `authBySession` 区分，轮到口令 cookie 的连接仍随轮换关闭，会话连接保持。因此 agent `xiangqi_new_game` 换局后，用户已在看的那一页会直接跳到新局，不需要刷新或重新点链接。
+
 ## 6. 隧道管理接口（H 实现）
 
 `src/host/tunnel.mjs`：
@@ -124,7 +126,8 @@ export function createTunnelManager({ config, log = () => {} })
   隧道**不得**在服务之外自行 `resolvePort()` 挑口。只有调用方没传端口时，才允许回退 `config.port` / `pickLocalPort(5000,5050)`。
   反例（线上事故）：站点绑到 `61350`，隧道却 `--url http://127.0.0.1:5000` → 公网 502。
 - 本地端口：`pickLocalPort(5000, 5050)` —— 从 5000 起扫，`net.createServer().listen()` 成功即用；全占则抛 `NO_FREE_PORT`。
-- `cloudflared`：spawn `cloudflared tunnel --no-autoupdate --url http://127.0.0.1:<port>`；从 **stderr** 匹配 `https://[a-z0-9-]+\.trycloudflare\.com`；30s 未拿到 URL 判失败；需要代理时读 `config.proxy`（默认 `http://127.0.0.1:7897`）注入 `HTTPS_PROXY`。
+- `cloudflared`：spawn `cloudflared tunnel --no-autoupdate --url http://127.0.0.1:<port> --metrics 127.0.0.1:<20500-20600 空闲口>`；从 **stderr** 匹配 `https://[a-z0-9-]+\.trycloudflare\.com`；30s 未拿到 URL 判失败；需要代理时读 `config.proxy`（默认 `http://127.0.0.1:7897`）注入 `HTTPS_PROXY`。
+  **必须显式给 `--metrics`**：cloudflared 默认抢 `127.0.0.1:20241`，本机已有实例（手工/上一版残留）时后来的进程会直接退出（code=1），表现为「前端点穿透就报错、隧道没啥用」。
 - `natfrp`（SakuraFrp）：`config.natfrp = { token, tunnelId, clientPath }`，默认命令 `[clientPath, '-f', token + ':' + tunnelId]`；缺 token/tunnelId → `start()` 抛 `NOT_CONFIGURED` 并提示改用 cloudflared。URL 从 stdout/stderr 行里匹配 `https?://\S+`。
 - 二进制查找顺序：`config.binPath` → `PATH` 里的 `cloudflared`/`frpc` → 仓库同级 `tunnel/bin/cloudflared.exe`（存在才用，不写死绝对路径）。
 - 本地配置：`src/host/config.mjs` 读 `xiangqi.config.json`（查找顺序：`$XQ_CONFIG` → `$DSH_HOME/plugins-data/xiangqi/config.json` → 仓库根 `xiangqi.config.json`，都 gitignore），env 覆盖：`XQ_TOKEN`、`XQ_PORT`、`XQ_MINUTES`、`XQ_NATFRP_TOKEN`、`XQ_NATFRP_TUNNEL`、`XQ_CLOUDFLARED`、`XQ_PROXY`、`XQ_DATA_DIR`。
