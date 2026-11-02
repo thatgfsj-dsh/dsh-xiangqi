@@ -47,6 +47,7 @@ export function applyMove(board, move) // 纯函数，返回新 board（不修�
 export function notation(board, move)  // 落子前的中文记谱：'炮二平五'（红）/ '炮8平5'（黑）
 export function statusOf(board)        // 'playing' | 'red-win' | 'black-win' | 'draw'
 export function asciiBoard(board)      // -> string[]，10 行文字棋盘（给 md / agent）
+export function moveTags(board, move)  // -> string[] 招数标签：将军/双将/将军抽车/将军抽子/将死/吃X/捉双/应将/过河
 ```
 
 `Move = { from: {file,rank}, to: {file,rank}, iccs: 'h2e2', capture: boolean }`
@@ -75,10 +76,12 @@ export function createGameService({ rules, minutes = 20, now = () => Date.now() 
 `Snapshot`：
 ```js
 { gameId, fen, turn:'red'|'black', status:'playing'|'red-win'|'black-win'|'draw',
-  rev, moves:[{n, color, iccs, notation, at}], lastMove:{iccs,from,to}|null,
+  rev, moves:[{n, color, iccs, notation, at, tags:string[]}], lastMove:{iccs,from,to,notation,tags}|null,
   humanSide, agentSide, startedAt, deadline, remainingMs,
   ascii: string[], recordMarkdown: string }
 ```
+
+> `tags` 为招数标签（`moveTags()` 产出），网页徽标、agent 工具输出、Markdown 记谱三处同源；空数组表示普通着法。
 
 `GameError`：`{ code, message, status }`（HTTP 映射：400/409/410）。
 
@@ -169,7 +172,7 @@ export function createTunnelManager({ config, log = () => {} })
 
 - 状态：进行中 · 轮到：黑方 · 剩余：18:42
 - FEN：`rnbakabnr/9/1c5c1/p1p1p1p1p/9/9/P1P1P1P1P/1C5C1/9/RNBAKABNR b`
-- 最近一手：炮二平五（h2e2）
+- 最近一手：炮二平五（h2e2）· 将军抽车
 
 ## 棋盘
 
@@ -180,6 +183,7 @@ export function createTunnelManager({ config, log = () => {} })
 | 回合 | 红方 | 黑方 |
 |---:|---|---|
 | 1 | 炮二平五 | 马8进7 |
+| 2 | 车二进六 吃马 | 炮8平9 |
 
 ## 给 agent 的下一步（可直接复制）
 
@@ -197,7 +201,9 @@ export function createTunnelManager({ config, log = () => {} })
 - 交互：点选/拖拽均可；非法走子必须弹出**人话错误**（用服务端 `message`），并让棋子抖动回弹。
 - 顶部（手机在上方）：轮到谁（红/黑 + 「你」标记）+ 倒计时 `mm:ss`（≤60s 变红闪烁）。
 - 底部（手机在下方）：棋谱列表（`1. 炮二平五  马8进7` 两列），自动滚动；桌面端放侧栏。
-- 控制区：新局、悔棋、认输、导出记谱（下载 `.md`）、穿透开关（显示公网 URL + 复制按钮 + 状态点）。
+- 控制区：新局、悔棋、认输、导出记谱（下载 `.md`）、音效开关（🔊/🔇，状态存 localStorage）、穿透开关（显示公网 URL + 复制按钮 + 状态点）。
+- **音效（0.1.5）**：`web/sound.js` 用 Web Audio 实时合成，零音频文件；人类落子低沉、agent 落子清脆，吃子加脆裂声，将军类播两声高音，结束按胜负播上行/下行三音；浏览器自动播放策略要求先有用户手势，`pointerdown`/`keydown` 里 `unlock()`。
+- **招数提示（0.1.5）**：棋谱每手渲染 `tags` 徽标（将军类红色 + `tag-pop` 动画）；将军/将死额外弹 toast + 提示音；逻辑在 `web/feedback.js`，棋谱渲染在 `web/record-view.js`（拆文件以守住单文件 ≤1000 行）。
 - 结束态：覆盖层显示胜负原因（将死/超时/认输/和棋），提供「再来一局」。
 - 无障碍/健壮：无 JS 时报错文本；SSE 断线自动重连（指数退避）；所有 DOM 更新走文本节点，不 `innerHTML` 拼接用户数据。
 - **`/api/state` 额外返回 `legal`**：`LegalityIndex = { "<fromSquare>": ["<toSquare>", ...] }`，由服务端用 `legalMoves` 全量生成，前端只做展示。

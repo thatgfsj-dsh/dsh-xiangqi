@@ -72,6 +72,7 @@ function cloneMove(move) {
     iccs: move.iccs,
     notation: move.notation,
     at: move.at,
+    tags: Array.isArray(move.tags) ? move.tags.slice() : [],
   }
 }
 
@@ -96,13 +97,20 @@ export function getRecordRendererSource() {
   return recordRendererSource
 }
 
+function tagsSuffix(move) {
+  if (!move || !Array.isArray(move.tags) || move.tags.length === 0) return ''
+  return ' ' + move.tags.join('·')
+}
+
 function moveRows(moves) {
   const rows = []
   for (let i = 0; i < moves.length; i += 2) {
     const red = moves[i]
     const black = moves[i + 1]
     rows.push(
-      `| ${Math.floor(i / 2) + 1} | ${red ? red.notation : ''} | ${black ? black.notation : ''} |`,
+      `| ${Math.floor(i / 2) + 1} | ${red ? red.notation + tagsSuffix(red) : ''} | ${
+        black ? black.notation + tagsSuffix(black) : ''
+      } |`,
     )
   }
   return rows
@@ -127,7 +135,7 @@ export function renderRecordMarkdown(snapshot, meta = {}) {
   lines.push(`- 状态：${statusText} · 轮到：${turnText} · 剩余：${remaining}`)
   lines.push(`- FEN：\`${snapshot.fen}\``)
   lines.push(
-    `- 最近一手：${last ? `${last.notation || ''}（${last.iccs}）` : '（暂无）'}`,
+    `- 最近一手：${last ? `${last.notation || ''}（${last.iccs}）${tagsSuffix(last).trim() ? ' · ' + last.tags.join('·') : ''}` : '（暂无）'}`,
   )
   lines.push('')
   lines.push('## 棋盘')
@@ -203,7 +211,13 @@ export function createGameService({ rules, minutes = 20, now = () => Date.now(),
       rev: s.rev,
       moves: s.moves.map(cloneMove),
       lastMove: s.lastMove
-        ? { iccs: s.lastMove.iccs, from: s.lastMove.from, to: s.lastMove.to, notation: s.lastMove.notation }
+        ? {
+            iccs: s.lastMove.iccs,
+            from: s.lastMove.from,
+            to: s.lastMove.to,
+            notation: s.lastMove.notation,
+            tags: Array.isArray(s.lastMove.tags) ? s.lastMove.tags.slice() : [],
+          }
         : null,
       humanSide: s.humanSide,
       agentSide: s.agentSide,
@@ -434,6 +448,14 @@ export function createGameService({ rules, minutes = 20, now = () => Date.now(),
         }
       })()
       const nextBoard = rules.applyMove(s.board, applied)
+      // 招数标签：将军 / 将军抽车 / 将死 / 吃X / 捉双 / 应将 / 过河 / 双将
+      const tags = (() => {
+        try {
+          return typeof rules.moveTags === 'function' ? rules.moveTags(s.board, applied) || [] : []
+        } catch {
+          return []
+        }
+      })()
       pushHistory()
       const at = now()
       if (s.startedAt === null) {
@@ -446,10 +468,11 @@ export function createGameService({ rules, minutes = 20, now = () => Date.now(),
         iccs,
         notation,
         at,
+        tags,
       })
       s.board = nextBoard
       s.turn = nextBoard.turn || (s.turn === 'red' ? 'black' : 'red')
-      s.lastMove = { iccs, from: applied.from, to: applied.to, notation }
+      s.lastMove = { iccs, from: applied.from, to: applied.to, notation, tags }
       s.rev += 1
       const status = rules.statusOf(nextBoard)
       s.status = status || 'playing'

@@ -10,6 +10,9 @@ import {
   pointOf,
   squareName,
 } from './pieces.js'
+import { createSoundKit } from './sound.js'
+import { createFeedback } from './feedback.js'
+import { createRecordView } from './record-view.js'
 const API = {
   state: '/api/state', move: '/api/move', newGame: '/api/new', action: '/api/action',
   events: '/api/events', record: '/api/record.md', tunnel: '/api/tunnel',
@@ -19,12 +22,14 @@ const SSE_MAX_DELAY = 30000
 const LOW_TIME_MS = 60000
 const TUNNEL_POLL_MS = 40000
 const SIDE_LABEL = { red: '红方', black: '黑方' }
+const sound = createSoundKit()
+const feedback = createFeedback({ sound, showToast, parseFen })
 const TUNNEL_TEXT = { stopped: '穿透未开启', starting: '穿透启动中…', running: '穿透已开启', error: '穿透出错', unavailable: '穿透不可用' }
 const END_REASON_TEXT = { resign: '认输', timeout: '超时', expired: '超时', checkmate: '将死', stalemate: '困毙', draw: '和棋', forfeit: '判负', abandoned: '中途退出' }
 const $ = (id) => document.getElementById(id)
 const ui = {
   app: $('app'), stage: $('stage'), board: $('board'), marks: $('layer-marks'), pieces: $('layer-pieces'), turnDot: $('turn-dot'), turnText: $('turn-text'), turnYou: $('turn-you'), timer: $('timer'),
-  btnNew: $('btn-new'), btnUndo: $('btn-undo'), btnResign: $('btn-resign'), btnRecord: $('btn-record'), btnTunnel: $('btn-tunnel'), recordScroll: $('record-scroll'), recordList: $('record-list'), recordCount: $('record-count'), recordEmpty: $('record-empty'),
+  btnNew: $('btn-new'), btnUndo: $('btn-undo'), btnResign: $('btn-resign'), btnRecord: $('btn-record'), btnSound: $('btn-sound'), btnTunnel: $('btn-tunnel'), recordScroll: $('record-scroll'), recordList: $('record-list'), recordCount: $('record-count'), recordEmpty: $('record-empty'),
   tunnelDot: $('tunnel-dot'), tunnelStatus: $('tunnel-status'), tunnelProvider: $('tunnel-provider'), tunnelToggle: $('btn-tunnel-toggle'), tunnelUrlRow: $('tunnel-url-row'), tunnelUrl: $('tunnel-url'), btnCopy: $('btn-copy'), tunnelHint: $('tunnel-hint'),
   overlay: $('overlay'), overlayTitle: $('overlay-title'), overlayReason: $('overlay-reason'), overlayKicker: $('overlay-kicker'), btnAgain: $('btn-again'), btnOverlayRecord: $('btn-overlay-record'), btnOverlayClose: $('btn-overlay-close'),
   toast: $('toast'), netBanner: $('net-banner'), bootNote: $('boot-note'), boardHint: $('board-hint'),
@@ -193,6 +198,7 @@ function applySnapshot(snap) {
     if (prev !== null) {
       store.legalPending = true
       queueStateRefresh()
+      feedback.onSnapshot(prev, snap)
     }
   }
   renderTurn()
@@ -313,46 +319,9 @@ function notationOf(move) {
   if (move && typeof move.iccs === 'string' && move.iccs) return move.iccs
   return ''
 }
+const recordView = createRecordView({ ui, store, notationOf })
 function renderRecord() {
-  const snap = store.snapshot
-  const moves = snap && Array.isArray(snap.moves) ? snap.moves : []
-  const rows = []
-  for (let i = 0; i < moves.length; i++) {
-    const move = moves[i] && typeof moves[i] === 'object' ? moves[i] : {}
-    const turnNo = Math.floor(i / 2) + 1
-    const isRed = typeof move.color === 'string' ? move.color !== 'black' : i % 2 === 0
-    const text = notationOf(move)
-    if (isRed) {
-      rows.push({ no: turnNo, red: text, black: '' })
-    } else {
-      const last = rows[rows.length - 1]
-      if (last && last.no === turnNo && !last.black) last.black = text
-      else rows.push({ no: turnNo, red: '', black: text })
-    }
-  }
-  const fragment = document.createDocumentFragment()
-  for (const row of rows) {
-    const li = document.createElement('li')
-    const no = document.createElement('span')
-    no.className = 'record-no'
-    no.textContent = String(row.no) + '.'
-    const red = document.createElement('span')
-    red.className = 'record-red'
-    red.textContent = row.red
-    const black = document.createElement('span')
-    black.className = 'record-black'
-    black.textContent = row.black
-    li.append(no, red, black)
-    fragment.appendChild(li)
-  }
-  if (fragment.lastChild) fragment.lastChild.classList.add('is-latest')
-  ui.recordList.replaceChildren(fragment)
-  ui.recordEmpty.hidden = moves.length > 0
-  ui.recordCount.textContent = moves.length + ' 手'
-  if (moves.length !== store.moveCount) {
-    store.moveCount = moves.length
-    ui.recordScroll.scrollTop = ui.recordScroll.scrollHeight
-  }
+  recordView.render()
 }
 function endReason(snap) {
   const raw = snap.endReason
@@ -963,6 +932,17 @@ function bindEvents() {
     store.overlayDismissed = true
     ui.overlay.hidden = true
   })
+  // 音效需要一次用户手势才能解锁（浏览器自动播放策略）
+  const unlockAudio = () => sound.unlock()
+  document.addEventListener('pointerdown', unlockAudio, { capture: true, passive: true })
+  document.addEventListener('keydown', unlockAudio, { capture: true })
+  if (ui.btnSound) {
+    ui.btnSound.addEventListener('click', () => {
+      sound.toggle()
+      feedback.renderSoundButton(ui.btnSound)
+      if (sound.enabled) sound.playMove({ side: 'human' })
+    })
+  }
   document.addEventListener('keydown', onKeyDown)
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'visible') { loadState().catch(() => {}); if (!store.connected) connectEvents() }
@@ -973,6 +953,7 @@ function bindEvents() {
 function init() {
   if (ui.bootNote) ui.bootNote.remove()
   bindEvents()
+  feedback.renderSoundButton(ui.btnSound)
   startTicking()
   watchSize()
   renderTurn()

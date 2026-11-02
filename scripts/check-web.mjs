@@ -19,7 +19,7 @@ const ROOT = resolve(HERE, '..')
 const WEB = join(ROOT, 'web')
 const MAX_LINES = 1000
 
-const WEB_FILES = ['index.html', 'app.js', 'style.css', 'pieces.js']
+const WEB_FILES = ['index.html', 'app.js', 'style.css', 'pieces.js', 'sound.js', 'feedback.js', 'record-view.js']
 const DOC_FILES = ['README.md', 'docs/USER-MANUAL.md']
 
 const MOUNT_IDS = [
@@ -38,6 +38,7 @@ const MOUNT_IDS = [
   'btn-undo',
   'btn-resign',
   'btn-record',
+  'btn-sound',
   'btn-tunnel',
   'btn-again',
   'tunnel-status',
@@ -147,7 +148,7 @@ for (const name of WEB_FILES) {
 check('web/ 内无 http(s) 外链资源', externalHits.length === 0, externalHits.join('、'))
 
 // ---------- 4. JS 不使用 HTML 字符串 / 动态执行 ----------
-for (const [name, text] of [['app.js', appJs], ['pieces.js', piecesJs]]) {
+for (const [name, text] of [['app.js', appJs], ['pieces.js', piecesJs], ['sound.js', texts.get('sound.js')]]) {
   if (!text) continue
   for (const [label, regex] of [
     ['innerHTML', /\binnerHTML\b/],
@@ -196,6 +197,33 @@ if (appJs) {
   while ((found = bareRegex.exec(appJs)) !== null) specifiers.push(found[1])
   const badImports = specifiers.filter((spec) => !spec.startsWith('.') && !spec.startsWith('/'))
   check('app.js 只 import 相对路径模块', badImports.length === 0, badImports.join('、'))
+}
+
+// ---------- 8. 音效与招数提示 ----------
+if (appJs) {
+  check('app.js 引入 ./sound.js', /from\s+['"]\.\/sound\.js['"]/.test(appJs), '缺少音效模块 import')
+  check('app.js 引入 ./feedback.js', /from\s+['"]\.\/feedback\.js['"]/.test(appJs), '缺少反馈模块 import')
+  check('app.js 引入 ./record-view.js', /from\s+['"]\.\/record-view\.js['"]/.test(appJs), '缺少棋谱视图 import')
+  check('app.js 用 pointerdown/keydown 解锁音频', /pointerdown[\s\S]{0,160}sound\.unlock|sound\.unlock[\s\S]{0,240}keydown/.test(appJs), '缺少用户手势解锁')
+  check('app.js 接通音效开关与招数提示', /renderSoundButton/.test(appJs) && /feedback\.onSnapshot/.test(appJs), '缺少音效开关/反馈接通')
+}
+const soundJs = texts.get('sound.js')
+if (soundJs) {
+  check('sound.js 使用 Web Audio 合成', /AudioContext/.test(soundJs), '应使用 AudioContext')
+  check('sound.js 有走子/将军/结束三种音效', /playMove/.test(soundJs) && /playAlert/.test(soundJs) && /playEnd/.test(soundJs), '缺少音效种类')
+  check('sound.js 音效开关持久化', /localStorage/.test(soundJs), '缺少 localStorage 持久化')
+}
+const feedbackJs = texts.get('feedback.js')
+if (feedbackJs) {
+  check('feedback.js 有招数提示', /announceTags/.test(feedbackJs) && /playAlert/.test(feedbackJs), '缺少将军提示')
+  check('feedback.js 区分人类/agent 音色', /side/.test(feedbackJs) && /playMove/.test(feedbackJs), '缺少音色区分')
+}
+const recordViewJs = texts.get('record-view.js')
+if (recordViewJs) {
+  check('record-view.js 渲染招数徽标', /record-tag/.test(recordViewJs), '缺少 record-tag')
+}
+if (css) {
+  check('style.css 有招数徽标样式', /\.record-tag\b/.test(css), '缺少 .record-tag 样式')
 }
 
 // ---------- 汇总 ----------

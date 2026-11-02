@@ -52,13 +52,22 @@ function statusLine(snapshot) {
   return `${status}${reason} · 轮到${turnText(snapshot)} · 剩余 ${formatClock(snapshot.remainingMs)}`
 }
 
+function tagsSuffix(move) {
+  if (!move || !Array.isArray(move.tags) || move.tags.length === 0) return ''
+  return `（${move.tags.join('·')}）`
+}
+
 function movesLine(moves) {
   if (!Array.isArray(moves) || moves.length === 0) return '棋谱：（尚未落子）'
   const parts = []
   for (let i = 0; i < moves.length; i += 2) {
     const red = moves[i]
     const black = moves[i + 1]
-    parts.push(`${Math.floor(i / 2) + 1}. ${red ? red.notation || red.iccs : '—'} ${black ? black.notation || black.iccs : ''}`.trim())
+    parts.push(
+      `${Math.floor(i / 2) + 1}. ${red ? (red.notation || red.iccs) + tagsSuffix(red) : '—'} ${
+        black ? (black.notation || black.iccs) + tagsSuffix(black) : ''
+      }`.trim(),
+    )
   }
   return `棋谱（${moves.length} 手）：${parts.join('  ')}`
 }
@@ -71,7 +80,7 @@ function boardText(snapshot) {
     ...(Array.isArray(snapshot.ascii) ? snapshot.ascii : ['（棋盘不可用）']),
     '',
     snapshot.lastMove
-      ? `最近一手：${snapshot.lastMove.notation || ''}（${snapshot.lastMove.iccs}）`
+      ? `最近一手：${snapshot.lastMove.notation || ''}（${snapshot.lastMove.iccs}）${tagsSuffix(snapshot.lastMove)}`
       : '最近一手：（尚未落子）',
     movesLine(snapshot.moves),
   ]
@@ -441,8 +450,9 @@ export function apply(ctx) {
         try {
           const result = state.service.move(input)
           const snapshot = result.snapshot
+          const tagLine = tagsSuffix(snapshot.lastMove).trim()
           return [
-            `走子成功：${snapshot.lastMove.notation || ''}（${snapshot.lastMove.iccs}）。`,
+            `走子成功：${snapshot.lastMove.notation || ''}（${snapshot.lastMove.iccs}）${tagLine}。`,
             boardText(snapshot),
             gameOverHint(snapshot),
           ]
