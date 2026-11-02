@@ -334,11 +334,11 @@ export async function startServer({
       'X-Accel-Buffering': 'no',
     })
     if (typeof res.flushHeaders === 'function') res.flushHeaders()
-    const client = { res, lastRev: -1 }
+    const client = { res, lastKey: '', tokenAtConnect: knownToken }
     sseClients.add(client)
     try {
       const snapshot = service.snapshot()
-      client.lastRev = snapshot.rev
+      client.lastKey = `${snapshot.gameId}:${snapshot.rev}`
       sendSse(res, snapshot)
     } catch (error) {
       sendSse(res, {
@@ -361,8 +361,19 @@ export async function startServer({
 
   const unsubscribe = service.subscribe((snapshot) => {
     for (const client of [...sseClients]) {
-      if (snapshot.rev === client.lastRev) continue
-      client.lastRev = snapshot.rev
+      // 口令轮换后旧连接立即失效（与 DESIGN「旧 token 立即失效」一致）
+      if (knownToken && client.tokenAtConnect !== knownToken) {
+        sseClients.delete(client)
+        try {
+          client.res.end()
+        } catch {
+          /* 已断开 */
+        }
+        continue
+      }
+      const key = `${snapshot.gameId}:${snapshot.rev}`
+      if (key === client.lastKey) continue
+      client.lastKey = key
       try {
         sendSse(client.res, snapshot)
       } catch {

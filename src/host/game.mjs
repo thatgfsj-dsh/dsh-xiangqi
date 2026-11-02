@@ -193,7 +193,8 @@ export function createGameService({ rules, minutes = 20, now = () => Date.now(),
   function buildCoreSnapshot() {
     const s = state
     const fen = rules.toFen(s.board)
-    const remainingMs = s.deadline ? Math.max(0, s.deadline - now()) : defaultMinutes * 60000
+    const gameMinutes = Number(s.minutes) > 0 ? Number(s.minutes) : defaultMinutes
+    const remainingMs = s.deadline ? Math.max(0, s.deadline - now()) : gameMinutes * 60000
     return {
       gameId: s.gameId,
       fen,

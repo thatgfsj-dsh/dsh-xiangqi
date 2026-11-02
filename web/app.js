@@ -48,8 +48,16 @@ class ApiError extends Error {
 // ---------- 基础工具 ----------
 function readToken() {
   try {
-    const raw = new URLSearchParams(window.location.search).get('k')
-    if (raw && /^[A-Za-z0-9_-]{4,128}$/.test(raw)) return raw
+    const params = new URLSearchParams(window.location.search)
+    const raw = params.get('k')
+    if (raw && /^[A-Za-z0-9_-]{4,128}$/.test(raw)) {
+      // 口令用一次即从地址栏与历史里抹掉，后续靠 HttpOnly cookie / 请求头
+      params.delete('k')
+      const query = params.toString()
+      const clean = window.location.pathname + (query ? '?' + query : '') + window.location.hash
+      try { window.history.replaceState({}, '', clean) } catch (err) { /* 忽略 */ }
+      return raw
+    }
   } catch (err) {
     // 地址栏异常时按无口令处理
   }
@@ -584,6 +592,7 @@ async function doMove(from, to) {
     shakePiece(from)
     if (err && err.status === 409) {
       showToast(err.message || '这一步走不了', 'error')
+      queueStateRefresh(0)
     } else {
       reportError(err, '走子失败')
     }
@@ -604,10 +613,14 @@ async function startNewGame(fromOverlay) {
   store.busy = true
   updateControls()
   try {
-    const data = await api(API.newGame, { method: 'POST', body: {} })
+    const body = {}
+    if (snap && snap.humanSide) body.humanSide = snap.humanSide
+    if (snap && Number(snap.minutes) > 0) body.minutes = Number(snap.minutes)
+    const data = await api(API.newGame, { method: 'POST', body })
     const url = data && typeof data.url === 'string' ? data.url : ''
     if (url) {
-      window.location.assign(url)
+      // 服务端对该响应已 Set-Cookie；这里只清掉地址栏口令，不把新口令写进历史
+      window.location.replace('/')
       return
     }
     store.overlayDismissed = false
