@@ -126,6 +126,7 @@ agent 和你在同一局里，但**各走各的**：
 | 手机打不开 `127.0.0.1` 链接 | 那是本机地址。先开穿透，用公网地址 + `/?k=<token>` 访问 |
 | agent 换了一局，我这页就不刷新了 | 0.1.2 起页面会拿到 `xq_sid` 会话 cookie，换局只作废旧口令，同一浏览器会自动跟随新局；仍是老页面就按一次 F5，或直接用 agent 发的新链接 |
 | 前端点「穿透 / 开启」报错 `隧道进程已退出（code=1）` | 多因 cloudflared 的 metrics 端口 20241 被历史进程占用（0.1.2 起已改成 20500-20600 自动挑口）。先确认有没有残留 cloudflared，`xiangqi_tunnel stop` 后用 `xiangqi_tunnel start` 重开 |
+| 穿透显示 running，但给的地址是 `api.trycloudflare.com` 之类打不开 | 0.1.3 起已修：只接受真正的 quick tunnel 域名，排除 api/developers/help 等 API 与文档端点。升级重启后重开隧道即可；新域名 DNS 生效要等十几秒 |
 
 ---
 

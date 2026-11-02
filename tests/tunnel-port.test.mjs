@@ -15,8 +15,7 @@ function makeFakeBinary(dir) {
     `writeFileSync(${JSON.stringify(argvFile)}, JSON.stringify(process.argv.slice(2)))`,
     "process.stderr.write('INF |  https://fake-port.trycloudflare.com  |\\n')",
     'setInterval(() => {}, 1000)',
-    "process.on('SIGTERM', () => process.exit(0))",
-  ].join('\n')
+    "process.on('SIGTERM', () => process.exit(0))",  ].join('\n')
   writeFileSync(bin, source, 'utf8')
   return { bin, argvFile }
 }
@@ -73,6 +72,31 @@ test('未传端口时才回退到端口区间挑选', async () => {
     assert.ok(target, '应有 --url 目标')
     const port = Number(target.split(':').pop())
     assert.ok(port >= 5000 && port <= 5050, `回退端口应在 5000-5050，实际 ${port}`)
+  } finally {
+    await manager.stop()
+  }
+})
+
+test('不会把 api.trycloudflare.com 之类的端点误当隧道地址', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'xq-tunnel-url-'))
+  const bin = join(dir, 'fake-cloudflared-api-first.mjs')
+  // 模拟真实 cloudflared：先打 API 端点（不是隧道地址），后打真正的 quick tunnel URL
+  writeFileSync(
+    bin,
+    [
+      "process.stderr.write('ERR failed to request quick Tunnel: Post \"https://api.trycloudflare.com/quicktunnel\": EOF\\n')",
+      "process.stderr.write('INF |  https://real-tunnel-abc.trycloudflare.com  |\\n')",
+      'setInterval(() => {}, 1000)',
+      "process.on('SIGTERM', () => process.exit(0))",
+    ].join('\n'),
+    'utf8',
+  )
+  const manager = createTunnelManager({ config: baseConfig(bin) })
+  try {
+    const status = await manager.start('cloudflared', { port: 5000 })
+    assert.equal(status.status, 'running')
+    assert.equal(status.url, 'https://real-tunnel-abc.trycloudflare.com')
+    assert.ok(!String(status.url).includes('api.trycloudflare.com'))
   } finally {
     await manager.stop()
   }

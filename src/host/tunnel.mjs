@@ -10,8 +10,40 @@ import { createServer } from 'node:net'
 import { join, resolve, sep } from 'node:path'
 import { REPO_ROOT } from './config.mjs'
 
-const TRYCLOUDFLARE_RE = /https:\/\/[a-z0-9-]+\.trycloudflare\.com/i
+// 注意：cloudflared 的日志里也会出现 `https://api.trycloudflare.com`（Quick Tunnel 的 API 端点），
+// 以及 developers/help 等文档域名。不能见 `*.trycloudflare.com` 就当隧道地址，否则会把
+// 用户引到一个打不开的 URL（这正是「前端穿透没啥用」的根因之一）。
+const RESERVED_TUNNEL_SUBDOMAINS = new Set([
+  'api',
+  'www',
+  'developers',
+  'developer',
+  'doc',
+  'docs',
+  'help',
+  'support',
+  'blog',
+  'status',
+])
+const TRYCLOUDFLARE_RE = /https:\/\/([a-z0-9-]+)\.trycloudflare\.com/gi
 const ANY_URL_RE = /https?:\/\/[^\s"'<>]+/i
+
+/** 从一行日志里取「真正的 quick tunnel 地址」；拿不到返回 null。 */
+function matchQuickTunnel(line) {
+  TRYCLOUDFLARE_RE.lastIndex = 0
+  let match
+  while ((match = TRYCLOUDFLARE_RE.exec(line)) !== null) {
+    const sub = match[1].toLowerCase()
+    if (!RESERVED_TUNNEL_SUBDOMAINS.has(sub)) return match[0]
+  }
+  return null
+}
+
+/** 从一行日志里取任意 URL（natfrp 用）。 */
+function matchAnyUrl(line) {
+  const match = ANY_URL_RE.exec(line)
+  return match ? match[0] : null
+}
 
 /** 隧道错误：带 code，便于 HTTP 层与工具层给出人话原因。 */
 export class TunnelError extends Error {
@@ -241,7 +273,7 @@ export function createTunnelManager({ config = {}, log = () => {} } = {}) {
     return pickLocalPort(lo, hi, config.host || '127.0.0.1')
   }
 
-  async function spawnAndWait(bin, args, { pattern, provider, port = null }) {
+  async function spawnAndWait(bin, args, { matcher, provider, port = null }) {
     state.localPort = port ?? (await resolvePort())
     const env = buildEnv(config.proxy)
     log(`[xiangqi] 启动隧道 ${provider}：本地端口 ${state.localPort}`)
@@ -251,7 +283,7 @@ export function createTunnelManager({ config = {}, log = () => {} } = {}) {
     state.startedAt = Date.now()
 
     const onStderr = lineReader((line) => {
-      if (pattern.test(line)) return
+      if (matcher(line)) return
       if (/(error|err|fail|warn)/i.test(line)) {
         log(`[xiangqi] ${provider}: ${redactText(line, { token: natfrpToken(), url: state.url })}`)
       }
@@ -287,8 +319,8 @@ export function createTunnelManager({ config = {}, log = () => {} } = {}) {
         else resolvePromise(url)
       }
       const scan = (line) => {
-        const match = pattern.exec(line)
-        if (match) finish(null, match[0])
+        const url = matcher(line)
+        if (url) finish(null, url)
       }
       child.stderr?.on('data', lineReader(scan))
       child.stdout?.on('data', lineReader(scan))
@@ -350,7 +382,7 @@ export function createTunnelManager({ config = {}, log = () => {} } = {}) {
             String(item).replace('{token}', natfrp.token).replace('{tunnelId}', natfrp.tunnelId),
           ),
         ]
-        url = await spawnAndWait(clientPath, args, { pattern: ANY_URL_RE, provider })
+        url = await spawnAndWait(clientPath, args, { matcher: matchAnyUrl, provider })
       } else {
         const bin = resolveBinary('cloudflared', config)
         // 端口必须与真正在监听的 HTTP 服务一致：优先用调用方传入的实际绑定端口，
@@ -372,7 +404,7 @@ export function createTunnelManager({ config = {}, log = () => {} } = {}) {
           `http://127.0.0.1:${port}`,
           ...(metricsPort ? ['--metrics', `127.0.0.1:${metricsPort}`] : []),
         ]
-        url = await spawnAndWait(bin, args, { pattern: TRYCLOUDFLARE_RE, provider, port })
+        url = await spawnAndWait(bin, args, { matcher: matchQuickTunnel, provider, port })
       }
       child = state.child
       state.status = 'running'

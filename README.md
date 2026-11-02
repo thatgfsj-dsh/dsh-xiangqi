@@ -182,6 +182,13 @@ Get-NetTCPConnection -State Listen |
 - 现在：插件每次启动都显式分配 `--metrics 127.0.0.1:20500-20600` 里的空闲口，多实例不再互抢。
 - 若仍报 `隧道进程已退出（code=1）`：先 `Get-CimInstance Win32_Process -Filter "Name='cloudflared.exe'"` 看有没有历史残留进程，确认后用 `xiangqi_tunnel stop`（只杀插件自己的）或手工结束那个残留，再重开。
 
+**C. 穿透「成功」但给的 URL 打不开（0.1.3 已修）**
+
+- 症状：插件显示 `running`，但 URL 是 `https://api.trycloudflare.com` 之类（打不开）。
+- 原因：cloudflared 日志里除了真正的 quick tunnel 地址，还有 `https://api.trycloudflare.com/quicktunnel`（API 端点）与 `developers/help` 文档域名；旧版正则「见 `*.trycloudflare.com` 就取」，会把 API 端点当隧道地址。
+- 现在：只接受非保留子域名（排除 `api/www/developers/doc/docs/help/support/blog/status`），并新增回归测试覆盖「先打 API 端点、后打真实 URL」的日志顺序。
+- 另：quick tunnel 新建后 DNS 生效需要十几秒，刚拿到 URL 就打可能短暂连不上，等 10–30 秒再试。
+
 ## 隐私与脱敏
 
 - 仓库内**不出现**真实公网 IP/域名、隧道地址、访问密钥、口令明文、本机绝对路径与用户名。
