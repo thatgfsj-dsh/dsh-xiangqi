@@ -14,6 +14,7 @@ import { GameError, createGameService } from './src/host/game.mjs'
 import { createTunnelManager, pickLocalPort } from './src/host/tunnel.mjs'
 import { startServer } from './src/host/server.mjs'
 import { createGomokuService } from './src/gomoku/service.mjs'
+import { createChessService } from './src/chess/service.mjs'
 import { getRules } from './src/rules/index.mjs'
 
 export const name = 'xiangqi'
@@ -148,6 +149,7 @@ export function apply(ctx) {
   }
 
   state.gomokuService = createGomokuService({ minutes: config.minutes })
+  state.chessService = createChessService({ minutes: config.minutes })
 
   state.service = createGameService({
     rules,
@@ -274,6 +276,45 @@ export function apply(ctx) {
     }
   })
 
+  function scheduleChessWake(snapshot) {
+    if (!config.autoWake || !state.wake.sessionId || !snapshot) return
+    const playing = snapshot.status === 'playing'
+    if (playing && snapshot.turn !== snapshot.agentSide) return
+    const key = `ch:${snapshot.gameId}:${playing ? `move:${snapshot.rev}` : 'end'}`
+    if (state.wake.lastKey === key) return
+    state.wake.lastKey = key
+    if (state.wake.timer) clearTimeout(state.wake.timer)
+    state.wake.timer = setTimeout(() => {
+      state.wake.timer = null
+      let current = null
+      try {
+        current = state.chessService.snapshot()
+      } catch {
+        return
+      }
+      if (!current || current.gameId !== snapshot.gameId) return
+      if (current.rev !== snapshot.rev) return
+      if (current.status === 'playing' && current.turn !== current.agentSide) return
+      const sideText = current.agentSide === 'white' ? '白方' : '黑方'
+      const last = current.lastMove
+      const text =
+        current.status === 'playing'
+          ? `[国际象棋自动唤醒] 对手刚走 ${last ? `${last.san}（${last.iccs}）` : ''}，现在轮到你（${sideText}）。\n用 chess_board 看棋盘，用 chess_move 走子（如 {"move":"e2e4"}）。`
+          : `[国际象棋自动唤醒] 对局已结束：${current.status}${current.endReason ? `（${current.endReason}）` : ''}。可用 chess_record 导出记谱。`
+      void wakeAgent(text).then((ok) => {
+        if (!ok) console.error('[xiangqi] 国际象棋自动唤醒未送达')
+      })
+    }, 500)
+    if (typeof state.wake.timer.unref === 'function') state.wake.timer.unref()
+  }
+  state.chessService.subscribe((snapshot) => {
+    try {
+      scheduleChessWake(snapshot)
+    } catch {
+      /* 唤醒失败不影响对局 */
+    }
+  })
+
   state.service.subscribe((snapshot) => {
     try {
       scheduleWake(snapshot)
@@ -307,6 +348,7 @@ export function apply(ctx) {
       const server = await startServer({
         service: state.service,
         gomoku: state.gomokuService,
+        chess: state.chessService,
         tunnel: state.tunnel,
         token: config.token || null,
         port,
@@ -368,6 +410,38 @@ export function apply(ctx) {
         const black = snapshot.moves[i]
         const white = snapshot.moves[i + 1]
         parts.push(`${Math.floor(i / 2) + 1}. ${black ? black.iccs : '—'} ${white ? white.iccs : ''}`.trim())
+      }
+      lines.push(`棋谱（${snapshot.moves.length} 手）：${parts.join('  ')}`)
+    } else {
+      lines.push('棋谱：（尚未落子）')
+    }
+    return lines.join('\n')
+  }
+
+  function chessText(snapshot) {
+    if (!snapshot) return '当前还没有国际象棋对局。请先调用 chess_new_game 新建一局。'
+    const statusText =
+      snapshot.status === 'playing'
+        ? `进行中 · 轮到${snapshot.turn === 'white' ? '白方' : '黑方'}`
+        : snapshot.status === 'draw'
+          ? '和棋'
+          : `${snapshot.status === 'white-win' ? '白方胜' : '黑方胜'}${snapshot.endReason ? `（${snapshot.endReason}）` : ''}`
+    const lines = [
+      `对局 ${snapshot.gameId} · ${statusText} · 剩余 ${formatClock(snapshot.remainingMs || 0)}`,
+      `FEN：${snapshot.fen}`,
+      '',
+      ...snapshot.ascii,
+      '',
+      snapshot.lastMove
+        ? `最近一手：${snapshot.lastMove.san}（${snapshot.lastMove.iccs}）${Array.isArray(snapshot.lastMove.tags) && snapshot.lastMove.tags.length ? ' · ' + snapshot.lastMove.tags.join('·') : ''}`
+        : '最近一手：（尚未落子）',
+    ]
+    if (Array.isArray(snapshot.moves) && snapshot.moves.length > 0) {
+      const parts = []
+      for (let i = 0; i < snapshot.moves.length; i += 2) {
+        const white = snapshot.moves[i]
+        const black = snapshot.moves[i + 1]
+        parts.push(`${Math.floor(i / 2) + 1}. ${white ? white.san : '—'} ${black ? black.san : ''}`.trim())
       }
       lines.push(`棋谱（${snapshot.moves.length} 手）：${parts.join('  ')}`)
     } else {
@@ -666,6 +740,18 @@ export function apply(ctx) {
         } else {
           lines.push('隧道：未初始化')
         }
+        try {
+          const gm = state.gomokuService.snapshot()
+          lines.push(`五子棋：${gm.gameId ? `${gm.gameId} · ${gm.status} · 轮到${gm.turn}` : '暂无（gomoku_new_game 新建）'}`)
+        } catch {
+          /* 忽略 */
+        }
+        try {
+          const ch = state.chessService.snapshot()
+          lines.push(`国际象棋：${ch.gameId ? `${ch.gameId} · ${ch.status} · 轮到${ch.turn}` : '暂无（chess_new_game 新建）'}`)
+        } catch {
+          /* 忽略 */
+        }
         if (state.startError) lines.push(`服务启动错误：${state.startError.message || state.startError}`)
         const wakeSession = state.wake && state.wake.sessionId ? state.wake.sessionId.slice(0, 8) : null
         lines.push(
@@ -787,6 +873,118 @@ export function apply(ctx) {
         const base = publicUrl() || (state.server ? state.server.url : 'http://127.0.0.1:5000')
         const markdown = state.gomokuService.recordMarkdown({ baseUrl: base })
         return markdown
+      },
+    },
+    {
+      name: 'chess_new_game',
+      description:
+        '新建一局国际象棋（标准规则：王车易位/吃过路兵/兵升变）：人类用网页走子，agent 用 chess_move 应手。返回邀请 URL（含 18 位口令）。单局制：会立即作废上一局与旧口令。',
+      parameters: {
+        type: 'object',
+        properties: {
+          humanSide: { type: 'string', enum: ['white', 'black'], description: '人类执哪一方，默认 white（白先）' },
+          minutes: { type: 'integer', description: '全局限时（分钟），默认沿用插件配置（20）' },
+        },
+      },
+      output: textOutput(),
+      async execute(args = {}) {
+        captureSession()
+        const server = await ensureReady()
+        if (!server) return notReadyText()
+        const options = {}
+        if (args.humanSide === 'white' || args.humanSide === 'black') options.humanSide = args.humanSide
+        if (Number.isFinite(Number(args.minutes)) && Number(args.minutes) > 0) options.minutes = Number(args.minutes)
+        const created = state.chessService.newGame(options)
+        if (typeof server.setChessToken === 'function') server.setChessToken(created.token)
+        const base = publicUrl() || server.url
+        return [
+          `已新建国际象棋对局 ${created.snapshot.gameId}。`,
+          `邀请 URL：${base}${created.urlPath}`,
+          `口令：${created.token}（只在本消息返回，请转交给人类；不要写进任何文件或记谱）`,
+          '',
+          chessText(created.snapshot),
+        ].join('\n')
+      },
+    },
+    {
+      name: 'chess_board',
+      description: '查看当前国际象棋棋局：文字棋盘、FEN、轮到谁、剩余时间、最近一手与棋谱。agent 走子前先调它。',
+      parameters: { type: 'object', properties: {} },
+      output: textOutput(),
+      async execute() {
+        captureSession()
+        if (!state.chessService.hasGame()) return '当前还没有国际象棋对局。请先调用 chess_new_game 新建一局。'
+        return chessText(state.chessService.snapshot())
+      },
+    },
+    {
+      name: 'chess_move',
+      description: '国际象棋走子。接受 ICCS（e2e4，升变加 q/r/b/n 如 e7e8q）或 SAN（Nf3、O-O、exd5）。非法时返回人话原因。',
+      parameters: {
+        type: 'object',
+        properties: { move: { type: 'string', description: '着法：ICCS（e2e4）或 SAN（Nf3）' } },
+        required: ['move'],
+      },
+      output: textOutput(),
+      async execute(args = {}) {
+        captureSession()
+        if (!state.chessService.hasGame()) return '当前还没有国际象棋对局。请先调用 chess_new_game 新建一局。'
+        const text = String(args.move || '').trim()
+        if (!text) return '缺少 move 参数：请给 ICCS（如 e2e4）或 SAN（如 Nf3）。'
+        const input = /^[a-h][1-8][a-h][1-8][qrbn]?$/i.test(text) ? { iccs: text.toLowerCase() } : { san: text }
+        try {
+          const result = state.chessService.move(input)
+          return `走子成功：${result.snapshot.lastMove.san}（${result.snapshot.lastMove.iccs}）。\n${chessText(result.snapshot)}`
+        } catch (error) {
+          return `走子失败（${error && error.code ? error.code : 'ERROR'}）：${error && error.message ? error.message : error}`
+        }
+      },
+    },
+    {
+      name: 'chess_wait',
+      description: '等待人类在国际象棋网页走子（最多 120 秒），返回新局面；超时返回当前局面。',
+      parameters: {
+        type: 'object',
+        properties: { timeoutMs: { type: 'integer', description: '等待上限（毫秒），默认 30000，最大 120000' } },
+      },
+      output: textOutput(),
+      async execute(args = {}) {
+        captureSession()
+        if (!state.chessService.hasGame()) return '当前还没有国际象棋对局。请先调用 chess_new_game 新建一局。'
+        const raw = Number(args.timeoutMs)
+        const timeoutMs = Number.isFinite(raw) && raw > 0 ? Math.min(raw, 120000) : 30000
+        const startSnapshot = state.chessService.snapshot()
+        const changed = await new Promise((resolve) => {
+          let done = false
+          const unsubscribe = state.chessService.subscribe((snapshot) => {
+            if (done) return
+            if (snapshot.rev !== startSnapshot.rev) {
+              done = true
+              unsubscribe()
+              resolve(snapshot)
+            }
+          })
+          setTimeout(() => {
+            if (done) return
+            done = true
+            unsubscribe()
+            resolve(null)
+          }, timeoutMs)
+        })
+        const snapshot = changed || state.chessService.snapshot()
+        return `${changed ? '局面已变化。' : '等待超时。'}\n${chessText(snapshot)}`
+      },
+    },
+    {
+      name: 'chess_record',
+      description: '导出国际象棋记谱 Markdown（棋盘 + SAN 着法 + 给 agent 的下一步），口令以 <token> 占位。',
+      parameters: { type: 'object', properties: {} },
+      output: textOutput(),
+      async execute() {
+        captureSession()
+        if (!state.chessService.hasGame()) return '当前还没有国际象棋对局。请先调用 chess_new_game 新建一局。'
+        const base = publicUrl() || (state.server ? state.server.url : 'http://127.0.0.1:5000')
+        return state.chessService.recordMarkdown({ baseUrl: base })
       },
     },
   ]

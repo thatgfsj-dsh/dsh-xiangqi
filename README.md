@@ -1,6 +1,6 @@
 # dsh-xiangqi
 
-> 在 DeepSeek Harness（DSH）里和 agent 下中国象棋 / 五子棋：插件在宿主进程里起独立对弈网站，人类用手机浏览器走子，agent 用工具应战，内网穿透把棋盘发到公网。
+> 在 DeepSeek Harness（DSH）里和 agent 下中国象棋 / 五子棋 / 国际象棋：插件在宿主进程里起独立对弈网站，人类用手机浏览器走子，agent 用工具应战，内网穿透把棋盘发到公网。
 
 - 形态：**独立网站**，不是 DSH 界面里的面板。插件启动 `node:http` 服务监听 `127.0.0.1:5000-5050` 的空闲端口，浏览器打开带口令的邀请链接即可对弈。
 - 对手：**本机 DSH 里的 agent**。agent 通过 `xiangqi_*` 工具走子、等待、导出记谱；人类只用浏览器。
@@ -17,7 +17,8 @@
 - **自动唤醒 agent**：人类在网页落子后，插件把最新局面写进 Markdown 记谱的同一时刻，给「发起对局的会话」`followup` 一条用户消息（`[象棋自动唤醒] 对手刚走 …，现在轮到你`），agent 当轮就会查局面并应手——不需要你每次手动喊「该你走了」。没绑定到会话或 `autoWake: false` 时退回「agent 主动 `xiangqi_wait` / 你 ping 一句」的老方式。
 - **落子音效**：Web Audio 实时合成（零音频文件、无外链），清脆的木质「嗒」+ 高频「啪」。你落子稍低、agent 落子更亮，吃子另有脆裂声，将军/将死有提示音，结束时按胜负播上行/下行三音；控制区 🔊 可关，选择记在 localStorage，首次点击/按键后解锁音频。
 - **招数提示 + 解说**：每手都带战术标签——`将军`、`双将`、`将军抽车`、`将军抽子`、`将死`、`吃车/吃马/…`、`捉双`、`应将`、`兵过河`；还会生成一句人话解说，如 **进车捉马 / 平炮打马 / 进炮吃马 / 进车将军**。网页棋谱里是彩色徽标（将军类附提示音 + toast），agent 工具输出与 Markdown 记谱同样带标签与解说。
-- **五子棋**：同一插件里还有 15×15 无禁手五子棋（黑先），独立页面 `/gomoku?k=<token>`；agent 用 `gomoku_new_game` / `gomoku_move` / `gomoku_wait` / `gomoku_record` 对弈，自动唤醒与长轮询动态刷新和象棋一致。
+- **五子棋**：15×15 无禁手（黑先），独立页面 `/gomoku?k=<token>`；木质立体棋盘用 SVG 画线 + 棋子层（DOM 只有几十个节点，手机加载约 40ms），落子/悬停都有反馈。agent 用 `gomoku_*` 工具对弈。
+- **国际象棋**：标准规则（王车易位、吃过路兵、兵升变可选后/车/象/马、将军/将死/逼和/50 回合/子力不足和棋），独立页面 `/chess?k=<token>`；SAN 记谱、升变选择面板、长轮询动态刷新；agent 用 `chess_*` 工具对弈。
 - **内网穿透（agent 侧）**：网页不再有穿透按钮/面板，统一由 agent 的工具 `xiangqi_tunnel start|stop` 管理（`cloudflared` 默认，`natfrp` 需本机配置），返回公网 URL 后发给人类即可。
 - **Markdown 记谱**：中文记谱 + ICCS + FEN + 文字棋盘，可导出 `.md` 给 agent 读。
 - **脱敏**：口令只在运行时产生，落盘记谱与日志只写 `<token>` 占位。
@@ -135,6 +136,11 @@ agent 可用的工具（名字固定）：
 | `gomoku_move` | `{ move: string }` | 落子，坐标如 `h8`（列 a-o，行 1-15）；不合法返回人话原因 |
 | `gomoku_wait` | `{ timeoutMs?: number }` | 等人类在五子棋网页落子（上限 120000ms），返回新局面 |
 | `gomoku_record` | `{}` | 返回五子棋记谱 Markdown（棋盘 + 坐标着法 + 给 agent 的下一步） |
+| `chess_new_game` | `{ humanSide?: 'white'\|'black', minutes?: number }` | 新建国际象棋局，返回 `/chess?k=<token>` 邀请 URL |
+| `chess_board` | `{}` | 返回国际象棋文字棋盘 + FEN + 轮到谁 + 最近一手 + SAN 棋谱 |
+| `chess_move` | `{ move: string }` | 接受 ICCS（`e2e4`，升变 `e7e8q`）或 SAN（`Nf3`/`O-O`/`exd5`） |
+| `chess_wait` | `{ timeoutMs?: number }` | 等人类在国际象棋网页走子（上限 120000ms） |
+| `chess_record` | `{}` | 返回国际象棋记谱 Markdown（棋盘 + SAN 着法） |
 
 > 五子棋是独立的一套页面与接口（`/gomoku`、`/api/gomoku/*`），与象棋互不影响；两边的自动唤醒、长轮询、口令规则一致。
 

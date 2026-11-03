@@ -7,6 +7,7 @@ import { join, resolve } from 'node:path'
 import { REPO_ROOT, loadConfig } from '../src/host/config.mjs'
 import { createGameService } from '../src/host/game.mjs'
 import { createGomokuService } from '../src/gomoku/service.mjs'
+import { createChessService } from '../src/chess/service.mjs'
 import { createTunnelManager, pickLocalPort } from '../src/host/tunnel.mjs'
 import { startServer } from '../src/host/server.mjs'
 import { getRules } from '../src/rules/index.mjs'
@@ -60,6 +61,7 @@ const assetsDir = args.assetsDir
 
 const rules = getRules('xiangqi')
 const gomokuService = createGomokuService({ minutes: config.minutes })
+const chessService = createChessService({ minutes: config.minutes })
 let server = null
 let tunnel = null
 const publicUrl = () => {
@@ -97,6 +99,7 @@ async function main() {
   server = await startServer({
     service,
     gomoku: gomokuService,
+    chess: chessService,
     tunnel,
     token: created.token,
     port,
@@ -106,8 +109,11 @@ async function main() {
   })
   const gmCreated = gomokuService.newGame({ minutes: config.minutes })
   if (typeof server.setGomokuToken === 'function') server.setGomokuToken(gmCreated.token)
+  const chCreated = chessService.newGame({ minutes: config.minutes })
+  if (typeof server.setChessToken === 'function') server.setChessToken(chCreated.token)
   const invite = `${server.url}${created.urlPath}`
   const gomokuInvite = `${server.url}${gmCreated.urlPath}`
+  const chessInvite = `${server.url}${chCreated.urlPath}`
 
   console.log('')
   console.log('  象棋对弈站点已启动')
@@ -117,6 +123,7 @@ async function main() {
   console.log(`  静态目录：${assetsDir}`)
   console.log(`  对局编号：${created.snapshot.gameId} · 限时 ${config.minutes} 分钟 · 红先`)
   console.log(`  五子棋：${gomokuInvite}`)
+  console.log(`  国际象棋：${chessInvite}`)
   console.log('  ────────────────────────────────')
   console.log('  Ctrl+C 退出')
   console.log('')

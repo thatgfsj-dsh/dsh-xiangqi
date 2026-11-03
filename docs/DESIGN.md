@@ -73,6 +73,23 @@ export function toFen(board)                 // 行压缩 FEN
 
 `src/gomoku/service.mjs` 提供与象棋对局服务同形状的接口（`newGame / snapshot / move / action / subscribe / verifyToken / recordMarkdown`），口令规则、20 分钟限时、单局制一致；`startServer({ gomoku })` 挂载 `/gomoku` 页面与 `/api/gomoku/*`（state / wait / move / new / action / record.md），复用同一套 `xq_sid` 会话 cookie 与隧道。
 
+## 4.2 国际象棋（0.4.0 新增，独立模块）
+
+`src/chess/rules.mjs`（纯函数，标准规则）：
+
+```js
+export function initialBoard()          // 起始局面
+export function fromFen(fen) / toFen(board)
+export function legalMoves(board)       // 过滤送王；含易位经过格校验
+export function validateMove(board, {iccs|san|from,to,promotion})
+export function applyMove(board, move)  // 易位挪车 / 吃过路兵 / 升变 / 权利与 ep 更新
+export function statusOf(board)         // {status, reason}: checkmate/stalemate/fifty-move/insufficient
+export function notation(board, move)   // SAN：消歧、+、#、O-O、=Q
+export function asciiBoard(board) / legalIndex(board)
+```
+
+`src/chess/service.mjs` 与其它棋种同形状（口令 / 20 分钟 / 单局制 / 订阅 / 记谱），move 额外返回 SAN 与战术标签（吃X/将军/将死/王车易位/吃过路兵/升变）。五子棋与国际象棋的 HTTP 适配统一收在 `src/host/aux-game-api.mjs`（鉴权 / 状态载荷 / 长轮询 / 页面 / move·new·action·record），`server.mjs` 只负责挂载，避免重复代码把单文件撑过 1000 行。
+
 非法原因 `code`（前端与工具都要用）：`NOT_YOUR_PIECE`、`EMPTY_SQUARE`、`ILLEGAL_PATTERN`、`SELF_CHECK`、`FLYING_GENERAL`、`OUT_OF_BOARD`、`GAME_OVER`。`message` 必须是人话（例：`炮吃子必须隔一个棋子`）。
 
 ## 4. 对局服务接口（H 实现，index.js/前端/工具消费）
@@ -128,6 +145,13 @@ export async function startServer({ service, tunnel, token, port, assetsDir, pre
 | GET | `/api/events` | SSE（保留兼容，前端 0.2.0 起不再使用）：`data: <snapshot json>\n\n`，25s 心跳注释行 |
 | GET | `/api/record.md` | `text/markdown; charset=utf-8` |
 | GET | `/gomoku` | 五子棋页面（校验五子棋口令或 `xq_sid`） |
+| GET | `/chess` | 国际象棋页面（同上） |
+| GET | `/api/chess/state` | `{ok, snapshot, invite?}`（快照：`kind:'chess'`, `fen`, `cells: Array(64)`, `legal`） |
+| GET | `/api/chess/wait` | 国际象棋长轮询 |
+| POST | `/api/chess/move` | body `{iccs}` / `{san}` / `{from,to,promotion?}` |
+| POST | `/api/chess/new` | 新建国际象棋局（新口令） |
+| POST | `/api/chess/action` | `{type:'resign'|'undo'|'restart'|'draw'}` |
+| GET | `/api/chess/record.md` | 国际象棋记谱 Markdown |
 | GET | `/api/gomoku/state` | `{ok, snapshot, invite?}`（五子棋快照：`kind:'gomoku'`, `cells: Array(225)`, `size:15`） |
 | GET | `/api/gomoku/wait` | 五子棋长轮询，语义同 `/api/wait` |
 | POST | `/api/gomoku/move` | body `{iccs:'h8'}` 或 `{file,rank}` → `{ok, snapshot}` |

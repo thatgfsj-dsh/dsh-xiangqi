@@ -1,4 +1,5 @@
 // 五子棋前端（原生 ES module，无构建、无外链）。规则全部在服务端，前端只负责展示与落子请求。
+// 棋盘用 SVG 画线 + 绝对定位棋子（15×15 只产生 1 个 SVG 和少量棋子节点，手机加载/重绘都快）。
 import { createSoundKit } from './sound.js'
 
 const SIZE = 15
@@ -17,17 +18,18 @@ const LOW_TIME_MS = 60000
 
 const $ = (id) => document.getElementById(id)
 const ui = {
-  app: $('app'), board: $('board'), turnDot: $('turn-dot'), turnText: $('turn-text'), turnYou: $('turn-you'),
-  timer: $('timer'), hint: $('hint'), btnNew: $('btn-new'), btnResign: $('btn-resign'), btnRecord: $('btn-record'),
-  btnSound: $('btn-sound'), recordList: $('record-list'), recordCount: $('record-count'), recordEmpty: $('record-empty'),
+  app: $('app'), board: $('board'), stones: $('board-stones'), ghost: $('board-ghost'),
+  turnDot: $('turn-dot'), turnText: $('turn-text'), turnYou: $('turn-you'), timer: $('timer'), hint: $('hint'),
+  btnNew: $('btn-new'), btnResign: $('btn-resign'), btnRecord: $('btn-record'), btnSound: $('btn-sound'),
+  recordList: $('record-list'), recordCount: $('record-count'), recordEmpty: $('record-empty'),
   overlay: $('overlay'), overlayTitle: $('overlay-title'), overlayReason: $('overlay-reason'),
   btnAgain: $('btn-again'), btnOverlayRecord: $('btn-overlay-record'), btnOverlayClose: $('btn-overlay-close'),
   toast: $('toast'), bootNote: $('boot-note'),
 }
 const store = {
-  token: readToken(), snapshot: null, cells: [], busy: false, overlayDismissed: false,
+  token: readToken(), snapshot: null, stoneNodes: new Map(), busy: false, overlayDismissed: false,
   connected: false, unauthorized: false, watchAbort: null, watchDelay: 400, toastTimer: 0,
-  timerBase: null, tickHandle: 0, lastKey: '',
+  timerBase: null, tickHandle: 0, ghostKey: '',
 }
 const sound = createSoundKit()
 
@@ -92,50 +94,43 @@ async function api(path, options = {}) {
   return data || {}
 }
 
-// ---------- 渲染 ----------
-function buildBoard() {
-  const fragment = document.createDocumentFragment()
-  for (let rank = SIZE - 1; rank >= 0; rank -= 1) {
-    for (let file = 0; file < SIZE; file += 1) {
-      const cell = document.createElement('button')
-      cell.type = 'button'
-      cell.className = 'cell'
-      cell.dataset.file = String(file)
-      cell.dataset.rank = String(rank)
-      cell.setAttribute('role', 'gridcell')
-      cell.setAttribute('aria-label', `${FILES[file]}${rank + 1}`)
-      const holder = document.createElement('span')
-      holder.className = 'stone-placeholder'
-      cell.appendChild(holder)
-      fragment.appendChild(cell)
-    }
-  }
-  ui.board.replaceChildren(fragment)
-  store.cells = Array.from(ui.board.children)
+// ---------- 棋盘绘制 ----------
+function placeStone(node, file, rank) {
+  node.style.left = ((file / (SIZE - 1)) * 100).toFixed(3) + '%'
+  node.style.top = (((SIZE - 1 - rank) / (SIZE - 1)) * 100).toFixed(3) + '%'
 }
 
 function renderSnapshot(snap) {
   if (!snap || typeof snap !== 'object') return
   const prev = store.snapshot
   store.snapshot = snap
-  store.timerBase = { ms: typeof snap.remainingMs === 'number' ? snap.remainingMs : null, at: performance.now(), running: snap.status === 'playing' && Array.isArray(snap.moves) && snap.moves.length > 0 }
-  const cells = Array.isArray(snap.cells) ? snap.cells : []
-  for (const cell of store.cells) {
-    const file = Number(cell.dataset.file)
-    const rank = Number(cell.dataset.rank)
-    const color = cells[rank * SIZE + file] || null
-    const existing = cell.querySelector('.stone')
-    if (color && !existing) {
-      const stone = document.createElement('span')
-      stone.className = 'stone stone--' + color
-      cell.appendChild(stone)
-      cell.classList.add('is-taken')
-    } else if (!color && existing) {
-      existing.remove()
-      cell.classList.remove('is-taken')
-    }
-    cell.classList.toggle('is-last', Boolean(snap.lastMove && snap.lastMove.file === file && snap.lastMove.rank === rank))
+  store.timerBase = {
+    ms: typeof snap.remainingMs === 'number' ? snap.remainingMs : null,
+    at: performance.now(),
+    running: snap.status === 'playing' && Array.isArray(snap.moves) && snap.moves.length > 0,
   }
+  const cells = Array.isArray(snap.cells) ? snap.cells : []
+  const nextNodes = new Map()
+  for (let rank = 0; rank < SIZE; rank += 1) {
+    for (let file = 0; file < SIZE; file += 1) {
+      const color = cells[rank * SIZE + file] || null
+      if (!color) continue
+      const key = FILES[file] + (rank + 1)
+      let node = store.stoneNodes.get(key)
+      if (!node) {
+        node = document.createElement('span')
+        node.className = 'stone stone--' + color
+        placeStone(node, file, rank)
+        ui.stones.appendChild(node)
+      }
+      node.classList.toggle('stone--last', Boolean(snap.lastMove && snap.lastMove.file === file && snap.lastMove.rank === rank))
+      nextNodes.set(key, node)
+    }
+  }
+  for (const [key, node] of store.stoneNodes) {
+    if (!nextNodes.has(key)) node.remove()
+  }
+  store.stoneNodes = nextNodes
   const prevKey = prev ? `${prev.gameId}:${prev.rev}` : ''
   const key = `${snap.gameId}:${snap.rev}`
   if (key !== prevKey && prev) {
@@ -155,11 +150,19 @@ function currentRemaining() {
   return Math.max(0, base.ms - (performance.now() - base.at))
 }
 
+function formatClock(ms) {
+  if (ms === null || ms === undefined || Number.isNaN(ms)) return '--:--'
+  const total = Math.max(0, Math.floor(ms / 1000))
+  const pad = (n) => (n < 10 ? '0' + n : String(n))
+  return pad(Math.floor(total / 60)) + ':' + pad(total % 60)
+}
+
 function renderStatus() {
   const snap = store.snapshot
   const text = formatClock(currentRemaining())
   if (ui.timer.textContent !== text) ui.timer.textContent = text
-  ui.timer.classList.toggle('is-low', Boolean(snap && snap.status === 'playing' && currentRemaining() !== null && currentRemaining() <= LOW_TIME_MS))
+  const low = Boolean(snap && snap.status === 'playing' && currentRemaining() !== null && currentRemaining() <= LOW_TIME_MS)
+  ui.timer.classList.toggle('is-low', low)
   if (!snap) {
     ui.turnText.textContent = '正在连接…'
     ui.turnYou.hidden = true
@@ -177,14 +180,7 @@ function renderStatus() {
   ui.turnText.textContent = (turn === 'black' ? '黑方' : '白方') + '落子'
   ui.turnYou.hidden = turn !== human
   ui.turnDot.className = 'dot dot--' + turn
-  ui.hint.textContent = turn === human ? '轮到你了：点空点落子' : '等待 agent 落子…'
-}
-
-function formatClock(ms) {
-  if (ms === null || ms === undefined || Number.isNaN(ms)) return '--:--'
-  const total = Math.max(0, Math.floor(ms / 1000))
-  const pad = (n) => (n < 10 ? '0' + n : String(n))
-  return pad(Math.floor(total / 60)) + ':' + pad(total % 60)
+  ui.hint.textContent = turn === human ? '轮到你：点空点落子' : '等待 agent 落子…'
 }
 
 function renderRecord() {
@@ -219,7 +215,9 @@ function renderOverlay() {
   const human = snap.humanSide === 'white' ? 'white' : 'black'
   const winner = snap.status === 'draw' ? null : snap.status === 'black-win' ? 'black' : 'white'
   ui.overlayTitle.textContent = !winner ? '和棋' : winner === human ? '你赢了' : '你输了'
-  ui.overlayReason.textContent = (snap.status === 'draw' ? '双方和棋' : (winner === 'black' ? '黑方胜' : '白方胜')) + (snap.endReason ? ' · ' + (END_TEXT[snap.endReason] || snap.endReason) : '')
+  ui.overlayReason.textContent =
+    (snap.status === 'draw' ? '双方和棋' : winner === 'black' ? '黑方胜' : '白方胜') +
+    (snap.endReason ? ' · ' + (END_TEXT[snap.endReason] || snap.endReason) : '')
   ui.overlay.hidden = false
 }
 
@@ -230,11 +228,54 @@ function updateControls() {
   ui.btnRecord.disabled = !snap || snap.status === 'no-game'
 }
 
+// ---------- 坐标换算 ----------
+function squareFromEvent(event) {
+  const rect = ui.stones.getBoundingClientRect()
+  if (!rect.width || !rect.height) return null
+  const x = ((event.clientX - rect.left) / rect.width) * (SIZE - 1)
+  const y = ((event.clientY - rect.top) / rect.height) * (SIZE - 1)
+  const file = Math.round(x)
+  const rank = SIZE - 1 - Math.round(y)
+  if (file < 0 || file >= SIZE || rank < 0 || rank >= SIZE) return null
+  if (Math.abs(x - file) > 0.52 || Math.abs(y - (SIZE - 1 - rank)) > 0.52) return null
+  return { file, rank }
+}
+
+function isTaken(file, rank) {
+  const snap = store.snapshot
+  if (!snap || !Array.isArray(snap.cells)) return false
+  return Boolean(snap.cells[rank * SIZE + file])
+}
+
+function updateGhost(event) {
+  const snap = store.snapshot
+  const human = snap && (snap.humanSide === 'white' ? 'white' : 'black')
+  const canPlay = Boolean(snap && snap.status === 'playing' && snap.turn === human && !store.busy)
+  const square = canPlay ? squareFromEvent(event) : null
+  if (!square || isTaken(square.file, square.rank)) {
+    if (store.ghostKey) {
+      store.ghostKey = ''
+      ui.ghost.hidden = true
+    }
+    return
+  }
+  const key = square.file + ':' + square.rank
+  if (store.ghostKey !== key) {
+    store.ghostKey = key
+    ui.ghost.className = 'board-ghost' + (human === 'white' ? ' board-ghost--white' : '')
+    ui.ghost.style.left = ((square.file / (SIZE - 1)) * 100).toFixed(3) + '%'
+    ui.ghost.style.top = (((SIZE - 1 - square.rank) / (SIZE - 1)) * 100).toFixed(3) + '%'
+    ui.ghost.hidden = false
+  }
+}
+
 // ---------- 交互 ----------
 async function doMove(file, rank) {
   if (store.busy) return
   store.busy = true
   updateControls()
+  ui.ghost.hidden = true
+  store.ghostKey = ''
   try {
     const data = await api(API.move, { method: 'POST', body: { file, rank } })
     if (data.snapshot) renderSnapshot(data.snapshot)
@@ -249,19 +290,21 @@ async function doMove(file, rank) {
 }
 
 function onBoardClick(event) {
-  const cell = event.target.closest('.cell')
-  if (!cell || !store.snapshot) return
-  if (store.snapshot.status !== 'playing' || store.unauthorized) return
-  const human = store.snapshot.humanSide === 'white' ? 'white' : 'black'
-  if (store.snapshot.turn !== human) {
+  const snap = store.snapshot
+  if (!snap) return
+  if (snap.status !== 'playing' || store.unauthorized) return
+  const human = snap.humanSide === 'white' ? 'white' : 'black'
+  if (snap.turn !== human) {
     showToast('还没轮到你', 'info')
     return
   }
-  if (cell.classList.contains('is-taken')) {
+  const square = squareFromEvent(event)
+  if (!square) return
+  if (isTaken(square.file, square.rank)) {
     showToast('这里已经有子了', 'info')
     return
   }
-  doMove(Number(cell.dataset.file), Number(cell.dataset.rank))
+  doMove(square.file, square.rank)
 }
 
 async function loadState() {
@@ -282,7 +325,6 @@ async function startNewGame(fromOverlay) {
     if (data.snapshot) renderSnapshot(data.snapshot)
     if (data.url) window.history.replaceState(null, '', data.url)
     showToast('新局已开始', 'ok')
-    if (store.token) return
   } catch (error) {
     showToast(error.message || '新局失败', 'error')
   } finally {
@@ -368,6 +410,11 @@ function startWatching() {
 // ---------- 启动 ----------
 function bindEvents() {
   ui.board.addEventListener('click', onBoardClick)
+  ui.board.addEventListener('pointermove', updateGhost)
+  ui.board.addEventListener('pointerleave', () => {
+    store.ghostKey = ''
+    ui.ghost.hidden = true
+  })
   ui.btnNew.addEventListener('click', () => startNewGame(false))
   ui.btnResign.addEventListener('click', () => runAction('resign'))
   ui.btnRecord.addEventListener('click', () => exportRecord())
@@ -406,7 +453,6 @@ function init() {
   if (ui.bootNote) ui.bootNote.remove()
   ui.btnSound.textContent = sound.enabled ? '🔊' : '🔇'
   ui.btnSound.setAttribute('aria-pressed', sound.enabled ? 'true' : 'false')
-  buildBoard()
   bindEvents()
   startTicking()
   renderStatus()
