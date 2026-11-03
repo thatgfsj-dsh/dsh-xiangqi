@@ -626,6 +626,43 @@ function enemySquaresOfType(board, color, types) {
   return out
 }
 
+/** 子力价值排序：解说里优先提最有价值的目标。 */
+const TARGET_VALUE = { r: 5, c: 4, n: 3, b: 2, a: 1, p: 0, k: -1 }
+
+/**
+ * 招数解说短语（如「进车捉马」「平炮打马」「进马吃炮」）。
+ * 「动作 + 兵种 + 意图 + 目标」；没有吃子/将军/捉子时返回空串。
+ */
+export function moveComment(board, input) {
+  const verdict = validateMove(board, input)
+  if (!verdict || verdict.ok !== true) return ''
+  const move = verdict.move
+  const mover = board.turn
+  const enemy = other(mover)
+  const next = applyMove(board, move)
+  const piece = at(board, move.from.file, move.from.rank)
+  if (!piece) return ''
+  const name = PIECE_NAMES[mover][piece.type]
+  const forward = mover === 'red' ? move.to.rank > move.from.rank : move.to.rank < move.from.rank
+  const action = move.from.rank === move.to.rank ? '平' : forward ? '进' : '退'
+  const captured = at(board, move.to.file, move.to.rank)
+  if (captured) return `${action}${name}吃${PIECE_NAMES[enemy][captured.type]}`
+  if (isKingAttacked(next, enemy)) return `${action}${name}将军`
+  let best = null
+  let bestValue = -1
+  for (const candidate of pseudoMovesFrom(next, move.to)) {
+    const target = at(next, candidate.to.file, candidate.to.rank)
+    if (!target || target.color !== enemy) continue
+    const value = TARGET_VALUE[target.type]
+    if (value === undefined || value <= bestValue) continue
+    best = target
+    bestValue = value
+  }
+  if (!best || bestValue <= 0) return ''
+  const verb = piece.type === 'c' ? '打' : '捉'
+  return `${action}${name}${verb}${PIECE_NAMES[enemy][best.type]}`
+}
+
 /** 走子后的「招数标签」，给界面与 agent 共用（如 ['吃车','将军抽车']）。 */
 export function moveTags(board, input) {
   const verdict = validateMove(board, input)

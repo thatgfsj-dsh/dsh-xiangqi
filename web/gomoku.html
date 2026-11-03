@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="dark">
+<meta name="referrer" content="no-referrer">
+<meta name="description" content="五子棋对弈：人类在浏览器落子，agent 用工具应战。">
+<title>五子棋 · 与 agent 对弈</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="/assets/gomoku.css">
+</head>
+<body>
+<div class="app" id="app">
+  <header class="topbar">
+    <div class="turn"><span class="dot" id="turn-dot"></span><span id="turn-text">正在连接…</span><span class="you" id="turn-you" hidden>你</span></div>
+    <div class="timer" id="timer">--:--</div>
+  </header>
+
+  <main class="stage">
+    <div class="board" id="board" role="grid" aria-label="五子棋棋盘 15×15"></div>
+    <p class="hint" id="hint">点空点落子</p>
+  </main>
+
+  <div class="toolbar">
+    <button class="btn btn--primary" id="btn-new" type="button">新局</button>
+    <button class="btn" id="btn-resign" type="button">认输</button>
+    <button class="btn" id="btn-record" type="button">记谱</button>
+    <button class="btn btn--icon" id="btn-sound" type="button" aria-pressed="true">🔊</button>
+  </div>
+
+  <section class="record">
+    <div class="record-head"><span>棋谱</span><span id="record-count">0 手</span></div>
+    <ol class="record-list" id="record-list"></ol>
+    <p class="record-empty" id="record-empty">还没有落子。黑先。</p>
+  </section>
+
+  <p class="boot-note" id="boot-note">正在加载棋局…如果一直停在这里，请刷新页面（需要启用 JavaScript）。</p>
+</div>
+
+<div class="overlay" id="overlay" hidden>
+  <div class="overlay-card">
+    <h2 id="overlay-title">对局结束</h2>
+    <p id="overlay-reason"></p>
+    <div class="overlay-actions">
+      <button class="btn btn--primary" id="btn-again" type="button">再来一局</button>
+      <button class="btn" id="btn-overlay-record" type="button">导出记谱</button>
+      <button class="btn btn--ghost" id="btn-overlay-close" type="button">看棋盘</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast" role="status" hidden></div>
+
+<noscript>
+  <div class="noscript"><h1>需要 JavaScript</h1><p>这个页面依赖 JavaScript 才能拉取棋局与落子，请启用后刷新。</p></div>
+</noscript>
+
+<script type="module" src="/assets/gomoku.js"></script>
+</body>
+</html>

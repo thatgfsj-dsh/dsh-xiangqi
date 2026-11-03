@@ -13,6 +13,7 @@ import { REPO_ROOT, loadConfig } from './src/host/config.mjs'
 import { GameError, createGameService } from './src/host/game.mjs'
 import { createTunnelManager, pickLocalPort } from './src/host/tunnel.mjs'
 import { startServer } from './src/host/server.mjs'
+import { createGomokuService } from './src/gomoku/service.mjs'
 import { getRules } from './src/rules/index.mjs'
 
 export const name = 'xiangqi'
@@ -53,8 +54,10 @@ function statusLine(snapshot) {
 }
 
 function tagsSuffix(move) {
-  if (!move || !Array.isArray(move.tags) || move.tags.length === 0) return ''
-  return `（${move.tags.join('·')}）`
+  if (!move) return ''
+  const comment = typeof move.comment === 'string' && move.comment ? `（${move.comment}）` : ''
+  const tags = Array.isArray(move.tags) && move.tags.length > 0 ? `（${move.tags.join('·')}）` : ''
+  return comment + tags
 }
 
 function movesLine(moves) {
@@ -144,6 +147,8 @@ export function apply(ctx) {
     return state.server ? state.server.url : null
   }
 
+  state.gomokuService = createGomokuService({ minutes: config.minutes })
+
   state.service = createGameService({
     rules,
     minutes: config.minutes,
@@ -217,7 +222,9 @@ export function apply(ctx) {
       if (current.status === 'playing' && current.turn !== current.agentSide) return
       const last = current.lastMove
       const who = current.agentSide === 'red' ? '红方' : '黑方'
-      const moveText = last && last.notation ? `${last.notation}${last.iccs ? `（${last.iccs}）` : ''}` : `第 ${current.rev} 手`
+      const moveText = last && last.notation
+        ? `${last.notation}${last.iccs ? `（${last.iccs}）` : ''}${last.comment ? ` · ${last.comment}` : ''}`
+        : `第 ${current.rev} 手`
       const text = current.status === 'playing'
         ? `[象棋自动唤醒] 对手刚走 ${moveText}，现在轮到你（${who}）。\n用 xiangqi_board 看当前局面，用 xiangqi_move 应手；走完可继续 xiangqi_wait 等对方落子。`
         : `[象棋自动唤醒] 对局已结束：${current.status}${current.endReason ? `（${current.endReason}）` : ''}。可用 xiangqi_record 导出记谱。`
@@ -227,6 +234,45 @@ export function apply(ctx) {
     }, 500)
     if (typeof state.wake.timer.unref === 'function') state.wake.timer.unref()
   }
+
+  // ---- 五子棋自动唤醒 ----
+  function scheduleGomokuWake(snapshot) {
+    if (!config.autoWake || !state.wake.sessionId || !snapshot) return
+    const playing = snapshot.status === 'playing'
+    if (playing && snapshot.turn !== snapshot.agentSide) return
+    const key = `gm:${snapshot.gameId}:${playing ? `move:${snapshot.rev}` : 'end'}`
+    if (state.wake.lastKey === key) return
+    state.wake.lastKey = key
+    if (state.wake.timer) clearTimeout(state.wake.timer)
+    state.wake.timer = setTimeout(() => {
+      state.wake.timer = null
+      let current = null
+      try {
+        current = state.gomokuService.snapshot()
+      } catch {
+        return
+      }
+      if (!current || current.gameId !== snapshot.gameId) return
+      if (current.rev !== snapshot.rev) return
+      if (current.status === 'playing' && current.turn !== current.agentSide) return
+      const sideText = current.agentSide === 'black' ? '黑方' : '白方'
+      const text =
+        current.status === 'playing'
+          ? `[五子棋自动唤醒] 对手刚落子 ${current.lastMove ? current.lastMove.iccs : ''}，现在轮到你（${sideText}）。\n用 gomoku_board 看棋盘，用 gomoku_move 落子（如 {"move":"h8"}）。`
+          : `[五子棋自动唤醒] 对局已结束：${current.status}${current.endReason ? `（${current.endReason}）` : ''}。可用 gomoku_record 导出记谱。`
+      void wakeAgent(text).then((ok) => {
+        if (!ok) console.error('[xiangqi] 五子棋自动唤醒未送达')
+      })
+    }, 500)
+    if (typeof state.wake.timer.unref === 'function') state.wake.timer.unref()
+  }
+  state.gomokuService.subscribe((snapshot) => {
+    try {
+      scheduleGomokuWake(snapshot)
+    } catch {
+      /* 唤醒失败不影响对局 */
+    }
+  })
 
   state.service.subscribe((snapshot) => {
     try {
@@ -260,6 +306,7 @@ export function apply(ctx) {
       }
       const server = await startServer({
         service: state.service,
+        gomoku: state.gomokuService,
         tunnel: state.tunnel,
         token: config.token || null,
         port,
@@ -298,6 +345,36 @@ export function apply(ctx) {
 
   // 立即异步启动（不 await）：插件加载与 --help 都不被阻塞。
   void ensureReady()
+
+  function gomokuText(snapshot) {
+    if (!snapshot) return '当前还没有五子棋对局。请先调用 gomoku_new_game 新建一局。'
+    const statusText =
+      snapshot.status === 'playing'
+        ? `进行中 · 轮到${snapshot.turn === 'black' ? '黑方' : '白方'}`
+        : snapshot.status === 'draw'
+          ? '和棋'
+          : `${snapshot.status === 'black-win' ? '黑方胜' : '白方胜'}${snapshot.endReason ? `（${snapshot.endReason}）` : ''}`
+    const lines = [
+      `对局 ${snapshot.gameId} · ${statusText} · 剩余 ${formatClock(snapshot.remainingMs || 0)}`,
+      `FEN：${snapshot.fen}`,
+      '',
+      ...snapshot.ascii,
+      '',
+      snapshot.lastMove ? `最近一手：${snapshot.lastMove.iccs}（${snapshot.lastMove.color === 'black' ? '黑方' : '白方'}）` : '最近一手：（尚未落子）',
+    ]
+    if (Array.isArray(snapshot.moves) && snapshot.moves.length > 0) {
+      const parts = []
+      for (let i = 0; i < snapshot.moves.length; i += 2) {
+        const black = snapshot.moves[i]
+        const white = snapshot.moves[i + 1]
+        parts.push(`${Math.floor(i / 2) + 1}. ${black ? black.iccs : '—'} ${white ? white.iccs : ''}`.trim())
+      }
+      lines.push(`棋谱（${snapshot.moves.length} 手）：${parts.join('  ')}`)
+    } else {
+      lines.push('棋谱：（尚未落子）')
+    }
+    return lines.join('\n')
+  }
 
   function notReadyText() {
     const reason = state.startError ? `（${state.startError.message || state.startError}）` : ''
@@ -597,6 +674,119 @@ export function apply(ctx) {
           }`,
         )
         return lines.join('\n')
+      },
+    },
+    {
+      name: 'gomoku_new_game',
+      description:
+        '新建一局五子棋（15×15 无禁手，黑先）：人类用网页落子，agent 用 gomoku_move 应手。返回邀请 URL（含 18 位口令）。单局制：会立即作废上一局与旧口令。',
+      parameters: {
+        type: 'object',
+        properties: {
+          humanSide: { type: 'string', enum: ['black', 'white'], description: '人类执哪一方，默认 black（黑先）' },
+          minutes: { type: 'integer', description: '全局限时（分钟），默认沿用插件配置（20）' },
+        },
+      },
+      output: textOutput(),
+      async execute(args = {}) {
+        captureSession()
+        const server = await ensureReady()
+        if (!server) return notReadyText()
+        const options = {}
+        if (args.humanSide === 'black' || args.humanSide === 'white') options.humanSide = args.humanSide
+        if (Number.isFinite(Number(args.minutes)) && Number(args.minutes) > 0) options.minutes = Number(args.minutes)
+        const created = state.gomokuService.newGame(options)
+        if (typeof server.setGomokuToken === 'function') server.setGomokuToken(created.token)
+        const base = publicUrl() || server.url
+        const url = `${base}/gomoku?k=${created.token}`
+        return [
+          `已新建五子棋对局 ${created.snapshot.gameId}。`,
+          `邀请 URL：${url}`,
+          `口令：${created.token}（只在本消息返回，请转交给人类；不要写进任何文件或记谱）`,
+          '',
+          gomokuText(created.snapshot),
+        ].join('\n')
+      },
+    },
+    {
+      name: 'gomoku_board',
+      description: '查看当前五子棋棋局：文字棋盘、FEN、轮到谁、剩余时间、最近一手与棋谱。agent 落子前先调它。',
+      parameters: { type: 'object', properties: {} },
+      output: textOutput(),
+      async execute() {
+        captureSession()
+        if (!state.gomokuService.hasGame()) return '当前还没有五子棋对局。请先调用 gomoku_new_game 新建一局。'
+        return gomokuText(state.gomokuService.snapshot())
+      },
+    },
+    {
+      name: 'gomoku_move',
+      description: '五子棋落子。坐标如 h8（列 a-o，行 1-15）。落子成功返回棋盘；不合法会返回人话原因。',
+      parameters: {
+        type: 'object',
+        properties: { move: { type: 'string', description: '落子坐标，如 h8' } },
+        required: ['move'],
+      },
+      output: textOutput(),
+      async execute(args = {}) {
+        captureSession()
+        if (!state.gomokuService.hasGame()) return '当前还没有五子棋对局。请先调用 gomoku_new_game 新建一局。'
+        const text = String(args.move || '').trim()
+        if (!text) return '缺少 move 参数：请给坐标，如 h8。'
+        try {
+          const result = state.gomokuService.move({ iccs: text })
+          return `落子成功：${result.snapshot.lastMove.iccs}。\n${gomokuText(result.snapshot)}`
+        } catch (error) {
+          return `落子失败（${error && error.code ? error.code : 'ERROR'}）：${error && error.message ? error.message : error}`
+        }
+      },
+    },
+    {
+      name: 'gomoku_wait',
+      description: '等待人类在五子棋网页落子（最多 120 秒），返回新局面；超时返回当前局面。',
+      parameters: {
+        type: 'object',
+        properties: { timeoutMs: { type: 'integer', description: '等待上限（毫秒），默认 30000，最大 120000' } },
+      },
+      output: textOutput(),
+      async execute(args = {}) {
+        captureSession()
+        if (!state.gomokuService.hasGame()) return '当前还没有五子棋对局。请先调用 gomoku_new_game 新建一局。'
+        const raw = Number(args.timeoutMs)
+        const timeoutMs = Number.isFinite(raw) && raw > 0 ? Math.min(raw, 120000) : 30000
+        const startSnapshot = state.gomokuService.snapshot()
+        const changed = await new Promise((resolve) => {
+          let done = false
+          const unsubscribe = state.gomokuService.subscribe((snapshot) => {
+            if (done) return
+            if (snapshot.rev !== startSnapshot.rev) {
+              done = true
+              unsubscribe()
+              resolve(snapshot)
+            }
+          })
+          setTimeout(() => {
+            if (done) return
+            done = true
+            unsubscribe()
+            resolve(null)
+          }, timeoutMs)
+        })
+        const snapshot = changed || state.gomokuService.snapshot()
+        return `${changed ? '局面已变化。' : '等待超时。'}\n${gomokuText(snapshot)}`
+      },
+    },
+    {
+      name: 'gomoku_record',
+      description: '导出五子棋记谱 Markdown（棋盘 + 坐标着法 + 给 agent 的下一步），口令以 <token> 占位。',
+      parameters: { type: 'object', properties: {} },
+      output: textOutput(),
+      async execute() {
+        captureSession()
+        if (!state.gomokuService.hasGame()) return '当前还没有五子棋对局。请先调用 gomoku_new_game 新建一局。'
+        const base = publicUrl() || (state.server ? state.server.url : 'http://127.0.0.1:5000')
+        const markdown = state.gomokuService.recordMarkdown({ baseUrl: base })
+        return markdown
       },
     },
   ]

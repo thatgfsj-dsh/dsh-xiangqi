@@ -630,6 +630,11 @@ select {
   border: 1px solid rgba(255, 214, 140, 0.22);
   vertical-align: 1px;
 }
+.record-tag--comment {
+  color: #cfe3ff;
+  background: rgba(120, 170, 255, 0.14);
+  border-color: rgba(120, 170, 255, 0.26);
+}
 .record-tag--check {
   color: #ffb3a3;
   background: rgba(255, 96, 80, 0.18);
@@ -641,7 +646,12 @@ select {
   to { transform: scale(1); opacity: 1; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .record-tag--check { animation: none; }
+  .record-tag--comment {
+  color: #cfe3ff;
+  background: rgba(120, 170, 255, 0.14);
+  border-color: rgba(120, 170, 255, 0.26);
+}
+.record-tag--check { animation: none; }
 }
 .record-empty {
   margin: 8px 6px 4px;

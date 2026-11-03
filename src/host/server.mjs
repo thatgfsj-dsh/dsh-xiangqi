@@ -211,6 +211,7 @@ export function resolveAssetPath(assetsDir, pathname) {
  */
 export async function startServer({
   service,
+  gomoku = null,
   tunnel = null,
   token = null,
   port = 0,
@@ -221,12 +222,15 @@ export async function startServer({
 } = {}) {
   if (!service) throw new TypeError('startServer: 缺少 service')
   let knownToken = typeof token === 'string' && token ? token : null
+  let gmToken = gomoku && typeof gomoku.token === 'string' ? gomoku.token : null
   let actualPort = 0
   let closed = false
   const sseClients = new Set()
 // 长轮询等待者：{ req, res, gameId, rev, timer, onClose }。
 // 这是前端「动态刷新」的主通道：HTTP 长轮询比 SSE 更抗代理缓冲/中断，公网隧道下也稳。
 const waiters = new Set()
+// 五子棋的长轮询等待者（与象棋分开，互不影响）。
+const gmWaiters = new Set()
 
   const localBaseUrl = () => `http://127.0.0.1:${actualPort}`
 
@@ -292,6 +296,145 @@ const waiters = new Set()
     return false
   }
 
+  // ---- 五子棋：独立的鉴权 / 状态载荷 / 长轮询 ----
+  function authorizeGomoku(req, url) {
+    if (preview) return true
+    if (!gomoku) return false
+    const candidates = []
+    const header = req.headers['x-xiangqi-token']
+    if (typeof header === 'string' && header) candidates.push(header)
+    const queryToken = url.searchParams.get('k')
+    if (queryToken) candidates.push(queryToken)
+    const cookieToken = parseCookies(req.headers.cookie).xq
+    if (cookieToken) candidates.push(cookieToken)
+    for (const candidate of candidates) {
+      if (typeof gomoku.verifyToken === 'function' && gomoku.verifyToken(candidate)) return true
+      if (gmToken && constantEqual(candidate, gmToken)) return true
+    }
+    return pageSessionValid(req)
+  }
+
+  function requireGomokuAuth(req, res, url) {
+    if (authorizeGomoku(req, url)) return true
+    sendJson(res, 401, { ok: false, code: 'UNAUTHORIZED', message: '口令无效或已失效' })
+    return false
+  }
+
+  function buildGomokuPayload(snapshot) {
+    if (!gomoku) throw new Error('五子棋服务未配置')
+    return { ok: true, snapshot: snapshot || gomoku.snapshot() }
+  }
+
+  function finishGmWaiter(waiter, snapshot) {
+    if (!gmWaiters.delete(waiter)) return
+    if (waiter.timer) clearTimeout(waiter.timer)
+    if (typeof waiter.req.removeListener === 'function') {
+      waiter.req.removeListener('close', waiter.onClose)
+      waiter.req.removeListener('error', waiter.onClose)
+    }
+    try {
+      sendJson(waiter.res, 200, buildGomokuPayload(snapshot))
+    } catch {
+      /* 客户端已断开 */
+    }
+  }
+
+  function handleGomokuWait(req, res, url) {
+    let current
+    try {
+      current = gomoku.snapshot()
+    } catch (error) {
+      handleGameError(res, error)
+      return
+    }
+    const sinceText = url.searchParams.get('since')
+    const sinceRev = sinceText === null ? null : Number(sinceText)
+    const timeoutRaw = Number(url.searchParams.get('timeout'))
+    const timeoutMs = Number.isFinite(timeoutRaw) && timeoutRaw > 0 ? Math.min(timeoutRaw, 30000) : 25000
+    if (sinceRev === null || !Number.isFinite(sinceRev) || current.rev !== sinceRev) {
+      sendJson(res, 200, buildGomokuPayload(current))
+      return
+    }
+    const waiter = { req, res, gameId: current.gameId, rev: current.rev, timer: null, onClose: null }
+    waiter.onClose = () => {
+      if (gmWaiters.delete(waiter) && waiter.timer) clearTimeout(waiter.timer)
+    }
+    req.on('close', waiter.onClose)
+    req.on('error', waiter.onClose)
+    waiter.timer = setTimeout(() => finishGmWaiter(waiter, null), timeoutMs)
+    if (typeof waiter.timer.unref === 'function') waiter.timer.unref()
+    gmWaiters.add(waiter)
+  }
+
+  async function handleGomokuApi(req, res, pathname, url, method) {
+    if (!gomoku) {
+      sendJson(res, 503, { ok: false, code: 'UNAVAILABLE', message: '五子棋服务未启用' })
+      return
+    }
+    if (!requireGomokuAuth(req, res, url)) return
+    try {
+      if (pathname === '/api/gomoku/state' && method === 'GET') {
+        const snapshot = gomoku.snapshot()
+        const invite = gmToken ? { url: `${currentBaseUrl()}/gomoku?k=${gmToken}`, tokenSet: true } : { url: null, tokenSet: Boolean(snapshot) }
+        sendJson(res, 200, { ...buildGomokuPayload(snapshot), invite })
+        return
+      }
+      if (pathname === '/api/gomoku/wait' && method === 'GET') {
+        handleGomokuWait(req, res, url)
+        return
+      }
+      if (pathname === '/api/gomoku/move' && method === 'POST') {
+        if (!requireJson(req, res)) return
+        const body = await readJson(req)
+        const result = gomoku.move(body)
+        sendJson(res, 200, buildGomokuPayload(result.snapshot))
+        return
+      }
+      if (pathname === '/api/gomoku/new' && method === 'POST') {
+        if (!requireJson(req, res)) return
+        const body = await readJson(req)
+        const humanSide = body.humanSide === 'white' ? 'white' : body.humanSide === 'black' ? 'black' : undefined
+        const minutes = Number(body.minutes)
+        const options = {}
+        if (humanSide) options.humanSide = humanSide
+        if (Number.isFinite(minutes) && minutes > 0) options.minutes = Math.min(minutes, 24 * 60)
+        const created = gomoku.newGame(options)
+        gmToken = created.token
+        sendJson(
+          res,
+          200,
+          { ...buildGomokuPayload(created.snapshot), url: `${currentBaseUrl()}${created.urlPath}` },
+          { 'Set-Cookie': [cookieHeader(created.token), pageSessionCookie(req)] },
+        )
+        return
+      }
+      if (pathname === '/api/gomoku/action' && method === 'POST') {
+        if (!requireJson(req, res)) return
+        const body = await readJson(req)
+        const result = gomoku.action(body.type)
+        const payload = buildGomokuPayload(result.snapshot)
+        const headers = {}
+        if (result.token) {
+          gmToken = result.token
+          payload.url = `${currentBaseUrl()}${result.urlPath}`
+          headers['Set-Cookie'] = [cookieHeader(result.token), pageSessionCookie(req)]
+        } else {
+          headers['Set-Cookie'] = pageSessionCookie(req)
+        }
+        sendJson(res, 200, payload, headers)
+        return
+      }
+      if (pathname === '/api/gomoku/record.md' && method === 'GET') {
+        const markdown = gomoku.recordMarkdown({ baseUrl: currentBaseUrl() })
+        sendText(res, 200, markdown, 'text/markdown; charset=utf-8')
+        return
+      }
+      sendJson(res, 404, { ok: false, code: 'NOT_FOUND', message: '路径不存在' })
+    } catch (error) {
+      handleGameError(res, error)
+    }
+  }
+
   function requireJson(req, res) {
     const type = req.headers['content-type']
     if (typeof type === 'string' && type.toLowerCase().includes('application/json')) return true
@@ -312,10 +455,10 @@ const waiters = new Set()
     sendJson(res, 500, { ok: false, code: 'INTERNAL', message: '服务器内部错误' })
   }
 
-  function sendPage(res, { setCookie = null } = {}) {
-    const file = assetsDir ? resolve(assetsDir, 'index.html') : null
+  function sendPage(res, { setCookie = null, name = 'index.html' } = {}) {
+    const file = assetsDir ? resolve(assetsDir, name) : null
     if (!file) {
-      sendText(res, 503, 'web/ 前端尚未就绪：缺少 index.html', 'text/plain; charset=utf-8')
+      sendText(res, 503, `web/ 前端尚未就绪：缺少 ${name}`, 'text/plain; charset=utf-8')
       return
     }
     readFile(file)
@@ -424,6 +567,17 @@ const waiters = new Set()
       }
     }
   })
+
+  // 五子棋：局面变化时唤醒它的长轮询等待者
+  if (gomoku && typeof gomoku.subscribe === 'function') {
+    gomoku.subscribe((snapshot) => {
+      for (const waiting of [...gmWaiters]) {
+        if (snapshot.gameId !== waiting.gameId || snapshot.rev !== waiting.rev) {
+          finishGmWaiter(waiting, snapshot)
+        }
+      }
+    })
+  }
 
   const heartbeat = setInterval(() => {
     for (const client of [...sseClients]) {
@@ -534,6 +688,38 @@ const waiters = new Set()
       const cookies = [pageSessionCookie(req)]
       if (tokenValid && queryToken) cookies.push(cookieHeader(queryToken))
       sendPage(res, { setCookie: cookies })
+      return
+    }
+
+    // --- 五子棋页面 ---
+    if (pathname === '/gomoku' || pathname === '/gomoku.html') {
+      if (method !== 'GET' && method !== 'HEAD') {
+        sendJson(res, 405, { ok: false, code: 'METHOD_NOT_ALLOWED', message: '只支持 GET' })
+        return
+      }
+      if (!gomoku) {
+        sendText(res, 404, '五子棋未启用', 'text/plain; charset=utf-8')
+        return
+      }
+      const queryToken = url.searchParams.get('k')
+      const cookieToken = parseCookies(req.headers.cookie).xq
+      const tokenValid =
+        (queryToken && typeof gomoku.verifyToken === 'function' && gomoku.verifyToken(queryToken)) ||
+        (cookieToken && typeof gomoku.verifyToken === 'function' && gomoku.verifyToken(cookieToken))
+      const valid = preview || tokenValid || pageSessionValid(req)
+      if (!valid) {
+        sendText(res, 401, MINIMAL_401, 'text/html; charset=utf-8', { 'Cache-Control': 'no-store' })
+        return
+      }
+      const cookies = [pageSessionCookie(req)]
+      if (tokenValid && queryToken) cookies.push(cookieHeader(queryToken))
+      sendPage(res, { setCookie: cookies, name: 'gomoku.html' })
+      return
+    }
+
+    // --- 五子棋 API ---
+    if (pathname.startsWith('/api/gomoku/')) {
+      await handleGomokuApi(req, res, pathname, url, method)
       return
     }
 
@@ -723,6 +909,10 @@ const waiters = new Set()
     setToken(value) {
       knownToken = typeof value === 'string' && value ? value : knownToken
     },
+    /** 五子棋新局后同步新口令（用于邀请 URL）。 */
+    setGomokuToken(value) {
+      gmToken = typeof value === 'string' && value ? value : gmToken
+    },
     close() {
       if (closed) return Promise.resolve()
       closed = true
@@ -749,6 +939,19 @@ const waiters = new Set()
         }
       }
       waiters.clear()
+      for (const waiting of [...gmWaiters]) {
+        if (waiting.timer) clearTimeout(waiting.timer)
+        if (typeof waiting.req.removeListener === 'function') {
+          waiting.req.removeListener('close', waiting.onClose)
+          waiting.req.removeListener('error', waiting.onClose)
+        }
+        try {
+          waiting.res.end()
+        } catch {
+          /* 忽略 */
+        }
+      }
+      gmWaiters.clear()
       return new Promise((resolvePromise) => {
         server.close(() => resolvePromise())
       })

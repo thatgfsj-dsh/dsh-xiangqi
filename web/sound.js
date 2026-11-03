@@ -95,11 +95,16 @@ export function createSoundKit(options = {}) {
     src.stop(t0 + decay + 0.02)
   }
 
-  // 清脆的落子声：极短的木质"嗒" + 高频噪声"啪" + 一点金属亮音（不要低频闷响）
-  function playClack({ pitch = 210, bright = 3200, volume = 0.5 } = {}) {
-    tone({ freq: pitch * 1.7, endFreq: pitch, decay: 0.03, peak: volume * 0.45, type: 'triangle' })
-    tone({ freq: 2680, decay: 0.012, peak: volume * 0.16, type: 'square' })
-    noiseBurst({ freq: bright, decay: 0.016, peak: volume * 0.55, q: 3.4 })
+  // 清脆的落子声：一次极短的高频"咔哒"（双击感）+ 一点点木质底音，几乎没有低频
+  function playClack({ pitch = 230, bright = 4200, volume = 0.5 } = {}) {
+    // 主声：6ms 高频噪声（滤波中心 4.2kHz，Q=6 → 干脆的"嗒"）
+    noiseBurst({ freq: bright, decay: 0.012, peak: volume * 0.6, q: 6 })
+    // 双击感：3ms 的高频 tick
+    noiseBurst({ freq: bright * 1.35, decay: 0.006, peak: volume * 0.28, q: 8, delay: 0.006 })
+    // 金属亮音：极短方波
+    tone({ freq: 3200, decay: 0.007, peak: volume * 0.2, type: 'square' })
+    // 木质底音：很短、很轻，只保留一点"落在棋盘上"的实体感
+    tone({ freq: pitch, endFreq: pitch * 0.8, decay: 0.024, peak: volume * 0.22, type: 'triangle' })
   }
 
   /**
@@ -111,16 +116,16 @@ export function createSoundKit(options = {}) {
     const agent = detail.side === 'agent'
     if (detail.capture) {
       // 吃子：一声高频脆裂 + 落子声 + 极短闷响
-      noiseBurst({ freq: 4400, decay: 0.022, peak: 0.42, q: 2.2 })
-      playClack({ pitch: agent ? 240 : 205, bright: 3600, volume: 0.58 })
-      tone({ freq: 150, endFreq: 90, decay: 0.05, peak: 0.3, delay: 0.008 })
+      noiseBurst({ freq: 5200, decay: 0.014, peak: 0.5, q: 4 })
+      noiseBurst({ freq: 1800, decay: 0.01, peak: 0.3, q: 2, delay: 0.012 })
+      playClack({ pitch: agent ? 270 : 235, bright: 4400, volume: 0.62 })
       return
     }
     // agent 落子更亮、更高一点；人类落子稍低，但都保持清脆
     playClack(
       agent
-        ? { pitch: 248, bright: 3700, volume: 0.5 }
-        : { pitch: 205, bright: 3050, volume: 0.52 },
+        ? { pitch: 270, bright: 4500, volume: 0.52 }
+        : { pitch: 235, bright: 4100, volume: 0.54 },
     )
   }
 

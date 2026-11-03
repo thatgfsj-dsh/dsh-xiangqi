@@ -40,10 +40,12 @@ function displayTurn(snapshot) {
   return TURN_TEXT[snapshot?.turn] || '未知'
 }
 
-/** 着法附带的招数标签（将军抽车 / 将死 / 吃车 …）。 */
+/** 着法附带的解说与招数标签（进车捉马 / 将军抽车 / 将死 …）。 */
 function tagsText(move) {
-  if (!move || !Array.isArray(move.tags) || move.tags.length === 0) return ''
-  return ' ' + move.tags.join('·')
+  if (!move) return ''
+  const comment = typeof move.comment === 'string' && move.comment ? `（${move.comment}）` : ''
+  const tags = Array.isArray(move.tags) && move.tags.length > 0 ? ' ' + move.tags.join('·') : ''
+  return comment + tags
 }
 
 function movesTable(moves) {
@@ -101,7 +103,10 @@ export function renderRecordMd(snapshot, options = {}) {
   lines.push(`- FEN：\`${snap.fen || '—'}\``)
   if (snap.lastMove && (snap.lastMove.notation || snap.lastMove.iccs)) {
     const last = snap.lastMove
-    lines.push(`- 最近一手：${last.notation || last.iccs}（${last.iccs || ''}）${tagsText(last).trim() ? ' · ' + last.tags.join('·') : ''}`)
+    const extra = []
+    if (typeof last.comment === 'string' && last.comment) extra.push(last.comment)
+    if (Array.isArray(last.tags) && last.tags.length > 0) extra.push(last.tags.join('·'))
+    lines.push(`- 最近一手：${last.notation || last.iccs}（${last.iccs || ''}）${extra.length ? ' · ' + extra.join(' · ') : ''}`)
   } else {
     lines.push('- 最近一手：—（尚未落子）')
   }

@@ -1,10 +1,16 @@
 // 棋谱列表渲染（含招数徽标：将军 / 将军抽车 / 吃车 …）。
 // 从 app.js 拆出以控制单文件行数；依赖由调用方注入。
 
-/** 把一步棋写入单元格：记谱 + 招数徽标。 */
-function appendMoveCell(container, text, tags) {
+/** 把一步棋写入单元格：记谱 + 解说徽标（进车捉马）+ 招数徽标（吃车/将军）。 */
+function appendMoveCell(container, text, tags, comment) {
   if (!text) return
   container.appendChild(document.createTextNode(text))
+  if (typeof comment === 'string' && comment) {
+    const badge = document.createElement('span')
+    badge.className = 'record-tag record-tag--comment'
+    badge.textContent = comment
+    container.appendChild(badge)
+  }
   if (!Array.isArray(tags)) return
   for (const tag of tags) {
     if (typeof tag !== 'string' || !tag) continue
@@ -32,15 +38,17 @@ export function createRecordView({ ui, store, notationOf }) {
       const isRed = typeof move.color === 'string' ? move.color !== 'black' : i % 2 === 0
       const text = notationOf(move)
       const tags = Array.isArray(move.tags) ? move.tags : []
+      const comment = typeof move.comment === 'string' ? move.comment : ''
       if (isRed) {
-        rows.push({ no: turnNo, red: text, redTags: tags, black: '', blackTags: [] })
+        rows.push({ no: turnNo, red: text, redTags: tags, redComment: comment, black: '', blackTags: [], blackComment: '' })
       } else {
         const last = rows[rows.length - 1]
         if (last && last.no === turnNo && !last.black) {
           last.black = text
           last.blackTags = tags
+          last.blackComment = comment
         } else {
-          rows.push({ no: turnNo, red: '', redTags: [], black: text, blackTags: tags })
+          rows.push({ no: turnNo, red: '', redTags: [], redComment: '', black: text, blackTags: tags, blackComment: comment })
         }
       }
     }
@@ -52,10 +60,10 @@ export function createRecordView({ ui, store, notationOf }) {
       no.textContent = String(row.no) + '.'
       const red = document.createElement('span')
       red.className = 'record-red'
-      appendMoveCell(red, row.red, row.redTags)
+      appendMoveCell(red, row.red, row.redTags, row.redComment)
       const black = document.createElement('span')
       black.className = 'record-black'
-      appendMoveCell(black, row.black, row.blackTags)
+      appendMoveCell(black, row.black, row.blackTags, row.blackComment)
       li.append(no, red, black)
       fragment.appendChild(li)
     }

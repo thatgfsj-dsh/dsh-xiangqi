@@ -54,6 +54,25 @@ export function moveTags(board, move)  // -> string[] 招数标签：将军/双�
 
 `src/rules/index.mjs`：`export function getRules(kind='xiangqi')`，返回上面这组函数与 `kind`，供未来加国际象棋。
 
+**0.3.0 起另有五子棋（独立模块，不放进上面的 registry）**：`src/gomoku/rules.mjs` + `src/gomoku/service.mjs`。
+
+```js
+// src/gomoku/rules.mjs
+export const SIZE = 15
+export function initialBoard(turn='black')   // { kind:'gomoku', size:15, cells: Array(225), turn, ply }
+export function parseSquare(text)            // 'h8' -> {file:7, rank:7}
+export function squareName(square)           // -> 'h8'
+export function legalMoves(board)            // 全部空点
+export function validateMove(board, input)   // {iccs} / {file,rank}；占位 → OCCUPIED
+export function applyMove(board, move)       // 纯函数，换手
+export function statusOf(board, lastMove)    // 'playing' | 'black-win' | 'white-win' | 'draw'
+export function isWinningMove(board, file, rank) // 横/竖/两斜 ≥5 连
+export function asciiBoard(board)            // 15 行文字棋盘（X/O/·）
+export function toFen(board)                 // 行压缩 FEN
+```
+
+`src/gomoku/service.mjs` 提供与象棋对局服务同形状的接口（`newGame / snapshot / move / action / subscribe / verifyToken / recordMarkdown`），口令规则、20 分钟限时、单局制一致；`startServer({ gomoku })` 挂载 `/gomoku` 页面与 `/api/gomoku/*`（state / wait / move / new / action / record.md），复用同一套 `xq_sid` 会话 cookie 与隧道。
+
 非法原因 `code`（前端与工具都要用）：`NOT_YOUR_PIECE`、`EMPTY_SQUARE`、`ILLEGAL_PATTERN`、`SELF_CHECK`、`FLYING_GENERAL`、`OUT_OF_BOARD`、`GAME_OVER`。`message` 必须是人话（例：`炮吃子必须隔一个棋子`）。
 
 ## 4. 对局服务接口（H 实现，index.js/前端/工具消费）
@@ -108,6 +127,13 @@ export async function startServer({ service, tunnel, token, port, assetsDir, pre
 | POST | `/api/action` | body `{type}` → 200 `{ok, snapshot, legal, url?}` |
 | GET | `/api/events` | SSE（保留兼容，前端 0.2.0 起不再使用）：`data: <snapshot json>\n\n`，25s 心跳注释行 |
 | GET | `/api/record.md` | `text/markdown; charset=utf-8` |
+| GET | `/gomoku` | 五子棋页面（校验五子棋口令或 `xq_sid`） |
+| GET | `/api/gomoku/state` | `{ok, snapshot, invite?}`（五子棋快照：`kind:'gomoku'`, `cells: Array(225)`, `size:15`） |
+| GET | `/api/gomoku/wait` | 五子棋长轮询，语义同 `/api/wait` |
+| POST | `/api/gomoku/move` | body `{iccs:'h8'}` 或 `{file,rank}` → `{ok, snapshot}` |
+| POST | `/api/gomoku/new` | 新建五子棋局，返回 `{ok, snapshot, url}`（新口令） |
+| POST | `/api/gomoku/action` | `{type:'resign'|'undo'|'restart'|'draw'}` |
+| GET | `/api/gomoku/record.md` | 五子棋记谱 Markdown |
 | GET | `/api/tunnel` | `{ok, provider, status:'stopped'|'starting'|'running'|'error', url, error}`（仅 agent 工具使用） |
 | POST | `/api/tunnel` | body `{action:'start'|'stop'|'status', provider?}`（仅 agent 工具使用；网页无穿透 UI） |
 
