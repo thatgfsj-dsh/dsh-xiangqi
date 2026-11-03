@@ -1,4 +1,4 @@
-/* 五子棋前端样式：与象棋页共用配色语言，但布局独立（棋盘 15×15 + 首屏一排功能）。 */
+/* 五子棋前端样式：木质立体棋盘 + 棋子层（SVG 画线，落子只增删少量 DOM，加载快）。 */
 :root {
   --bg: #16110c;
   --panel: rgba(38, 28, 18, 0.92);
@@ -8,7 +8,6 @@
   --text-faint: #9b8972;
   --accent: #e0a45c;
   --danger: #e0533f;
-  --ok: #7fc08a;
   --gap: 12px;
   --radius-md: 14px;
   --radius-sm: 10px;
@@ -21,6 +20,7 @@ body {
   color: var(--text);
   font-family: var(--font);
   min-height: 100dvh;
+  -webkit-tap-highlight-color: transparent;
 }
 button { font: inherit; color: inherit; }
 :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
@@ -63,64 +63,98 @@ button { font: inherit; color: inherit; }
   align-items: center;
   justify-content: center;
   gap: 6px;
-  height: calc(100svh - 210px);
+  height: calc(100svh - 215px);
   min-height: 300px;
 }
+.board-wrap { width: 100%; display: grid; place-items: center; }
+
+/* ---------- 木质立体棋盘 ---------- */
 .board {
   position: relative;
-  width: min(100%, calc((100svh - 250px) * 1));
+  width: min(100%, calc(100svh - 260px));
   aspect-ratio: 1;
-  border-radius: 10px;
-  background: linear-gradient(160deg, #e8c088 0%, #d8a869 55%, #c99051 100%);
-  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.5), inset 0 0 0 1px rgba(255, 240, 210, 0.5);
-  display: grid;
-  grid-template-columns: repeat(15, 1fr);
-  grid-template-rows: repeat(15, 1fr);
-  padding: 2.6%;
-  gap: 0;
-}
-.cell {
-  position: relative;
-  border: none;
-  background: transparent;
-  padding: 0;
+  border-radius: 16px;
+  background:
+    repeating-linear-gradient(92deg, rgba(120, 72, 30, 0.16) 0 2px, rgba(255, 220, 170, 0.05) 2px 6px),
+    linear-gradient(160deg, #f0cd97 0%, #e2b377 42%, #cf9a58 100%);
+  box-shadow:
+    0 2px 0 rgba(255, 240, 210, 0.55) inset,
+    0 -3px 0 rgba(110, 66, 26, 0.55) inset,
+    0 10px 0 #a2703a,
+    0 13px 0 #7f5426,
+    0 26px 44px rgba(0, 0, 0, 0.6),
+    0 40px 70px rgba(0, 0, 0, 0.35);
+  touch-action: manipulation;
   cursor: pointer;
-  display: grid;
-  place-items: center;
 }
-/* 棋盘线：每个格子的右下用伪元素画十字线 */
-.cell::before {
+.board::before {
   content: "";
   position: absolute;
-  inset: 0;
-  background:
-    linear-gradient(to right, transparent calc(50% - 0.5px), rgba(90, 55, 25, 0.55) calc(50% - 0.5px), rgba(90, 55, 25, 0.55) calc(50% + 0.5px), transparent calc(50% + 0.5px)),
-    linear-gradient(to bottom, transparent calc(50% - 0.5px), rgba(90, 55, 25, 0.55) calc(50% - 0.5px), rgba(90, 55, 25, 0.55) calc(50% + 0.5px), transparent calc(50% + 0.5px));
+  inset: 4.2%;
+  border-radius: 9px;
+  background: linear-gradient(155deg, #f3d6a5 0%, #e8bd85 45%, #d9a86a 100%);
+  box-shadow:
+    inset 0 2px 6px rgba(96, 56, 20, 0.42),
+    inset 0 -2px 4px rgba(255, 240, 210, 0.5),
+    0 0 0 1px rgba(110, 66, 26, 0.35);
   pointer-events: none;
 }
-.cell.is-edge-top::before { background-size: 100% 50%, 100% 100%; background-position: bottom, left; }
+.board-grid {
+  position: absolute;
+  inset: 7.4%;
+  width: 85.2%;
+  height: 85.2%;
+  overflow: visible;
+  pointer-events: none;
+}
+.board-grid line { stroke: rgba(86, 52, 22, 0.78); stroke-width: 0.055; stroke-linecap: round; }
+.board-grid circle { fill: rgba(70, 40, 16, 0.85); }
+
+.board-stones {
+  position: absolute;
+  inset: 7.4%;
+  pointer-events: none;
+}
 .stone {
-  width: 84%;
-  height: 84%;
+  position: absolute;
+  width: 6.6%;
+  aspect-ratio: 1;
   border-radius: 50%;
-  z-index: 1;
-  animation: stone-drop 0.16s ease-out;
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.5);
+  transform: translate(-50%, -50%);
+  animation: stone-drop 0.18s cubic-bezier(0.3, 1.4, 0.5, 1);
 }
-.stone--black { background: radial-gradient(circle at 34% 28%, #6a6258 0%, #2a241e 42%, #0e0b08 100%); }
-.stone--white { background: radial-gradient(circle at 34% 28%, #ffffff 0%, #f0e8da 45%, #c9bda8 100%); }
-@keyframes stone-drop { from { transform: scale(1.5); opacity: 0.4; } to { transform: scale(1); opacity: 1; } }
-.cell.is-last .stone { outline: 2px solid rgba(255, 90, 60, 0.9); outline-offset: 1px; }
-.cell:hover:not(.is-taken) .stone-placeholder { opacity: 1; }
-.stone-placeholder {
-  width: 84%;
-  height: 84%;
+.stone--black {
+  background: radial-gradient(circle at 34% 28%, #7a746b 0%, #332d26 38%, #0b0906 100%);
+  box-shadow:
+    0 3px 4px rgba(0, 0, 0, 0.62),
+    0 1px 1px rgba(0, 0, 0, 0.5),
+    inset 2px 2px 3px rgba(255, 255, 255, 0.22),
+    inset -2px -3px 4px rgba(0, 0, 0, 0.6);
+}
+.stone--white {
+  background: radial-gradient(circle at 34% 28%, #ffffff 0%, #f5eddc 42%, #c9bda4 100%);
+  box-shadow:
+    0 3px 4px rgba(0, 0, 0, 0.5),
+    0 1px 1px rgba(0, 0, 0, 0.35),
+    inset 2px 2px 3px rgba(255, 255, 255, 0.95),
+    inset -2px -3px 5px rgba(120, 100, 70, 0.45);
+}
+.stone--last { box-shadow: 0 0 0 2px rgba(255, 96, 64, 0.95), 0 3px 5px rgba(0, 0, 0, 0.55); }
+@keyframes stone-drop {
+  from { transform: translate(-50%, -50%) scale(1.5); opacity: 0.3; }
+  to { transform: translate(-50%, -50%) scale(1); opacity: 1; }
+}
+
+.board-ghost {
+  position: absolute;
+  width: 6.6%;
+  aspect-ratio: 1;
   border-radius: 50%;
-  background: rgba(40, 26, 12, 0.18);
-  opacity: 0;
-  transition: opacity 0.12s ease;
-  z-index: 1;
+  transform: translate(-50%, -50%);
+  background: radial-gradient(circle at 34% 28%, rgba(60, 48, 36, 0.5) 0%, rgba(30, 22, 14, 0.42) 100%);
+  pointer-events: none;
 }
+.board-ghost--white { background: radial-gradient(circle at 34% 28%, rgba(255, 255, 255, 0.62) 0%, rgba(220, 208, 188, 0.5) 100%); }
 .hint { margin: 0; font-size: 12px; color: var(--text-faint); }
 
 .toolbar { grid-area: toolbar; display: flex; gap: 8px; }
@@ -148,7 +182,7 @@ button { font: inherit; color: inherit; }
   padding: 8px 12px 10px;
 }
 .record-head { display: flex; justify-content: space-between; font-size: 12px; color: var(--text-dim); padding-bottom: 6px; border-bottom: 1px solid rgba(255, 232, 200, 0.08); }
-.record-list { list-style: none; margin: 6px 0 0; padding: 0; max-height: 42vh; overflow-y: auto; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px 14px; }
+.record-list { list-style: none; margin: 6px 0 0; padding: 0; max-height: 38vh; overflow-y: auto; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px 14px; }
 .record-list li { font-size: 13px; color: var(--text-dim); display: flex; gap: 8px; }
 .record-list li .no { color: var(--text-faint); min-width: 20px; }
 .record-empty { margin: 8px 0 0; font-size: 12px; color: var(--text-faint); text-align: center; }

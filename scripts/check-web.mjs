@@ -22,6 +22,7 @@ const MAX_LINES = 1000
 const WEB_FILES = [
   'index.html', 'app.js', 'style.css', 'pieces.js', 'sound.js', 'feedback.js', 'record-view.js',
   'gomoku.html', 'gomoku.js', 'gomoku.css',
+  'chess.html', 'chess.js', 'chess.css',
 ]
 const DOC_FILES = ['README.md', 'docs/USER-MANUAL.md']
 
@@ -152,6 +153,7 @@ for (const [name, text] of [
   ['pieces.js', piecesJs],
   ['sound.js', texts.get('sound.js')],
   ['gomoku.js', texts.get('gomoku.js')],
+  ['chess.js', texts.get('chess.js')],
 ]) {
   if (!text) continue
   for (const [label, regex] of [
@@ -258,6 +260,7 @@ if (gmHtml) {
   check('gomoku.html 引入 /assets/gomoku.css', /href="\/assets\/gomoku\.css"/.test(gmHtml), '缺少 gomoku.css')
   check('gomoku.html 引入 /assets/gomoku.js（module）', /<script[^>]*type="module"[^>]*src="\/assets\/gomoku\.js"/i.test(gmHtml), '缺少 module 脚本')
   check('gomoku.html 有棋盘挂载点', /id="board"/.test(gmHtml), '缺少 #board')
+  check('gomoku.html 有 SVG 网格与棋子层', /id="board-grid"/.test(gmHtml) && /id="board-stones"/.test(gmHtml), '缺少 SVG 网格/棋子层')
 }
 if (gmJs) {
   check('gomoku.js 用长轮询 /api/gomoku/wait', /\/api\/gomoku\/wait/.test(gmJs), '缺少长轮询')
@@ -266,8 +269,32 @@ if (gmJs) {
   check('gomoku.js 不拼接 HTML', !/innerHTML|insertAdjacentHTML/.test(gmJs), '不允许 innerHTML')
 }
 if (gmCss) {
-  check('gomoku.css 有 15 列网格', /repeat\(15,/.test(gmCss), '缺少 15 列网格')
+  check('gomoku.css 有 SVG 棋盘线样式', /\.board-grid line/.test(gmCss), '缺少 SVG 棋盘线样式')
   check('gomoku.css 有黑/白棋子样式', /\.stone--black/.test(gmCss) && /\.stone--white/.test(gmCss), '缺少棋子样式')
+}
+
+// ---------- 11. 国际象棋前端 ----------
+const chHtml = texts.get('chess.html')
+const chJs = texts.get('chess.js')
+const chCss = texts.get('chess.css')
+if (chHtml) {
+  check('chess.html 声明 doctype/lang/charset', /^\s*<!doctype html>/i.test(chHtml) && /lang="zh-CN"/.test(chHtml) && /charset="utf-8"/i.test(chHtml), '缺少基础声明')
+  check('chess.html 有 viewport', /name="viewport"[^>]*width=device-width/i.test(chHtml), '缺少手机 viewport')
+  check('chess.html 引入 /assets/chess.css', /href="\/assets\/chess\.css"/.test(chHtml), '缺少 chess.css')
+  check('chess.html 引入 /assets/chess.js（module）', /<script[^>]*type="module"[^>]*src="\/assets\/chess\.js"/i.test(chHtml), '缺少 module 脚本')
+  check('chess.html 有棋盘与升变面板', /id="board"/.test(chHtml) && /id="promo"/.test(chHtml), '缺少棋盘/升变面板')
+}
+if (chJs) {
+  check('chess.js 用长轮询 /api/chess/wait', /\/api\/chess\/wait/.test(chJs), '缺少长轮询')
+  check('chess.js 走子走 /api/chess/move', /\/api\/chess\/move/.test(chJs), '缺少走子接口')
+  check('chess.js 8×8 棋盘', /for \(let file = 0; file < 8/.test(chJs), '棋盘应为 8×8')
+  check('chess.js 不拼接 HTML', !/innerHTML|insertAdjacentHTML/.test(chJs), '不允许 innerHTML')
+  check('chess.js 有升变选择', /promoQ|promotion/.test(chJs), '缺少升变处理')
+}
+if (chCss) {
+  check('chess.css 有 8×8 网格', /repeat\(8,/.test(chCss), '缺少 8 列网格')
+  check('chess.css 有明暗格样式', /\.sq--light/.test(chCss) && /\.sq--dark/.test(chCss), '缺少明暗格样式')
+  check('chess.css 有棋子样式', /\.piece--white/.test(chCss) && /\.piece--black/.test(chCss), '缺少棋子样式')
 }
 
 // ---------- 汇总 ----------
