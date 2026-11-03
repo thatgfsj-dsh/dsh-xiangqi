@@ -45,7 +45,11 @@ test('人类走子后自动唤醒 agent（followup 一条含着法的用户消�
   })
 
   const byName = (name) => tools.find((tool) => tool.name === name)
-  assert.equal(tools.length, 7, '应注册 7 个工具')
+  // 象棋 7 个 + 五子棋 5 个 = 12
+  assert.equal(tools.length, 12, '应注册 12 个工具（象棋 7 + 五子棋 5）')
+  for (const name of ['xiangqi_new_game', 'xiangqi_move', 'gomoku_new_game', 'gomoku_move', 'gomoku_wait']) {
+    assert.ok(byName(name), `缺少工具 ${name}`)
+  }
 
   // 等服务真正绑定端口
   let newGameText = ''

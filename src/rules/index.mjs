@@ -61,5 +61,15 @@ export function moveTags(board, move) {
   }
 }
 
+/** 招数解说短语（如「进车捉马」「平炮打马」）；获取不到时返回空串。 */
+export function moveComment(board, move) {
+  if (typeof xiangqi.moveComment !== 'function') return ''
+  try {
+    return xiangqi.moveComment(board, move) || ''
+  } catch {
+    return ''
+  }
+}
+
 export { xiangqi }
-export default { getRules, supportedKinds, findMoveByNotation, legalIndex, moveTags }
+export default { getRules, supportedKinds, findMoveByNotation, legalIndex, moveTags, moveComment }

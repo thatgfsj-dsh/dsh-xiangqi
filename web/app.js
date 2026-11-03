@@ -183,6 +183,7 @@ function applySnapshot(snap) {
     const parsed = parseFen(snap.fen)
     store.board = parsed.pieces
     store.selected = null
+    clearPicked()
     renderPieces()
     renderMarks()
     renderRecord()
@@ -472,6 +473,7 @@ function handleSquare(square) {
   showToast('点自己的棋子，再点绿色圆点落子', 'info')
 }
 function selectSquare(square) {
+  clearPicked()
   store.selected = square
   markPicked(square, true)
   renderMarks()
@@ -504,6 +506,7 @@ async function doMove(from, to) {
   try {
     const data = await api(API.move, { method: 'POST', body: { from, to } })
     store.selected = null
+    clearPicked()
     if (data.snapshot) applySnapshot(data.snapshot)
     else await loadState()
     renderMarks()
@@ -724,6 +727,10 @@ function snapshotToSquare(point) {
   return squareName({ file: point.file, rank: point.rank })
 }
 /** 拿起效果：选中的棋子抬高 + 阴影加深（CSS 类控制，配合 transition）。 */
+/** 清掉所有棋子的抬起态（换选/落子/重绘时调用，避免旧棋子一直悬浮）。 */
+function clearPicked() {
+  for (const node of store.pieceNodes.values()) node.classList.remove('is-picked')
+}
 function markPicked(square, picked) {
   const node = square ? store.pieceNodes.get(squareOf(square)) : null
   if (!node) return

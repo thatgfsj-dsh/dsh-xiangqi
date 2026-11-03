@@ -73,6 +73,7 @@ function cloneMove(move) {
     notation: move.notation,
     at: move.at,
     tags: Array.isArray(move.tags) ? move.tags.slice() : [],
+    comment: typeof move.comment === 'string' ? move.comment : '',
   }
 }
 
@@ -98,8 +99,10 @@ export function getRecordRendererSource() {
 }
 
 function tagsSuffix(move) {
-  if (!move || !Array.isArray(move.tags) || move.tags.length === 0) return ''
-  return ' ' + move.tags.join('·')
+  if (!move) return ''
+  const comment = typeof move.comment === 'string' && move.comment ? `（${move.comment}）` : ''
+  const tags = Array.isArray(move.tags) && move.tags.length > 0 ? ' ' + move.tags.join('·') : ''
+  return comment + tags
 }
 
 function moveRows(moves) {
@@ -135,7 +138,7 @@ export function renderRecordMarkdown(snapshot, meta = {}) {
   lines.push(`- 状态：${statusText} · 轮到：${turnText} · 剩余：${remaining}`)
   lines.push(`- FEN：\`${snapshot.fen}\``)
   lines.push(
-    `- 最近一手：${last ? `${last.notation || ''}（${last.iccs}）${tagsSuffix(last).trim() ? ' · ' + last.tags.join('·') : ''}` : '（暂无）'}`,
+    `- 最近一手：${last ? `${last.notation || ''}（${last.iccs}）${[last.comment, ...(Array.isArray(last.tags) ? last.tags : [])].filter(Boolean).length ? ' · ' + [last.comment, ...(Array.isArray(last.tags) ? last.tags : [])].filter(Boolean).join(' · ') : ''}` : '（暂无）'}`,
   )
   lines.push('')
   lines.push('## 棋盘')
@@ -217,6 +220,7 @@ export function createGameService({ rules, minutes = 20, now = () => Date.now(),
             to: s.lastMove.to,
             notation: s.lastMove.notation,
             tags: Array.isArray(s.lastMove.tags) ? s.lastMove.tags.slice() : [],
+            comment: typeof s.lastMove.comment === 'string' ? s.lastMove.comment : '',
           }
         : null,
       humanSide: s.humanSide,
@@ -456,6 +460,16 @@ export function createGameService({ rules, minutes = 20, now = () => Date.now(),
           return []
         }
       })()
+      // 招数解说短语（进车捉马 / 平炮打马 …）
+      const comment = (() => {
+        try {
+          return typeof rules.moveComment === 'function' ? rules.moveComment(s.board, applied) || '' : ''
+        } catch {
+          return ''
+        }
+      })()
+      // 解说里已经包含的标签不再重复（例如「进炮吃马」里不必再挂一个「吃马」）
+      const dedupedTags = comment ? tags.filter((tag) => !comment.includes(tag)) : tags
       pushHistory()
       const at = now()
       if (s.startedAt === null) {
@@ -468,11 +482,12 @@ export function createGameService({ rules, minutes = 20, now = () => Date.now(),
         iccs,
         notation,
         at,
-        tags,
+        tags: dedupedTags,
+        comment,
       })
       s.board = nextBoard
       s.turn = nextBoard.turn || (s.turn === 'red' ? 'black' : 'red')
-      s.lastMove = { iccs, from: applied.from, to: applied.to, notation, tags }
+      s.lastMove = { iccs, from: applied.from, to: applied.to, notation, tags: dedupedTags, comment }
       s.rev += 1
       const status = rules.statusOf(nextBoard)
       s.status = status || 'playing'

@@ -19,7 +19,10 @@ const ROOT = resolve(HERE, '..')
 const WEB = join(ROOT, 'web')
 const MAX_LINES = 1000
 
-const WEB_FILES = ['index.html', 'app.js', 'style.css', 'pieces.js', 'sound.js', 'feedback.js', 'record-view.js']
+const WEB_FILES = [
+  'index.html', 'app.js', 'style.css', 'pieces.js', 'sound.js', 'feedback.js', 'record-view.js',
+  'gomoku.html', 'gomoku.js', 'gomoku.css',
+]
 const DOC_FILES = ['README.md', 'docs/USER-MANUAL.md']
 
 const MOUNT_IDS = [
@@ -144,7 +147,12 @@ for (const name of WEB_FILES) {
 check('web/ 内无 http(s) 外链资源', externalHits.length === 0, externalHits.join('、'))
 
 // ---------- 4. JS 不使用 HTML 字符串 / 动态执行 ----------
-for (const [name, text] of [['app.js', appJs], ['pieces.js', piecesJs], ['sound.js', texts.get('sound.js')]]) {
+for (const [name, text] of [
+  ['app.js', appJs],
+  ['pieces.js', piecesJs],
+  ['sound.js', texts.get('sound.js')],
+  ['gomoku.js', texts.get('gomoku.js')],
+]) {
   if (!text) continue
   for (const [label, regex] of [
     ['innerHTML', /\binnerHTML\b/],
@@ -238,6 +246,28 @@ if (css) {
   check('style.css 有拿起抬起样式', /\.piece\.is-picked/.test(css), '缺少 .piece.is-picked')
   check('style.css 手机首屏棋盘占满剩余高度', /\.stage\s*\{[\s\S]*?height:\s*calc\(100svh - 1\d\dpx\)/.test(css), '缺少手机首屏高度')
   check('style.css 棋谱不再挤占首屏（无 max-height 限制）', /\.record\s*\{[\s\S]*?max-height:\s*none/.test(css), '棋谱应放在首屏下方')
+}
+
+// ---------- 10. 五子棋前端 ----------
+const gmHtml = texts.get('gomoku.html')
+const gmJs = texts.get('gomoku.js')
+const gmCss = texts.get('gomoku.css')
+if (gmHtml) {
+  check('gomoku.html 声明 doctype/lang/charset', /^\s*<!doctype html>/i.test(gmHtml) && /lang="zh-CN"/.test(gmHtml) && /charset="utf-8"/i.test(gmHtml), '缺少基础声明')
+  check('gomoku.html 有 viewport', /name="viewport"[^>]*width=device-width/i.test(gmHtml), '缺少手机 viewport')
+  check('gomoku.html 引入 /assets/gomoku.css', /href="\/assets\/gomoku\.css"/.test(gmHtml), '缺少 gomoku.css')
+  check('gomoku.html 引入 /assets/gomoku.js（module）', /<script[^>]*type="module"[^>]*src="\/assets\/gomoku\.js"/i.test(gmHtml), '缺少 module 脚本')
+  check('gomoku.html 有棋盘挂载点', /id="board"/.test(gmHtml), '缺少 #board')
+}
+if (gmJs) {
+  check('gomoku.js 用长轮询 /api/gomoku/wait', /\/api\/gomoku\/wait/.test(gmJs), '缺少长轮询')
+  check('gomoku.js 落子走 /api/gomoku/move', /\/api\/gomoku\/move/.test(gmJs), '缺少落子接口')
+  check('gomoku.js 15×15 棋盘', /const SIZE = 15/.test(gmJs), '棋盘应为 15×15')
+  check('gomoku.js 不拼接 HTML', !/innerHTML|insertAdjacentHTML/.test(gmJs), '不允许 innerHTML')
+}
+if (gmCss) {
+  check('gomoku.css 有 15 列网格', /repeat\(15,/.test(gmCss), '缺少 15 列网格')
+  check('gomoku.css 有黑/白棋子样式', /\.stone--black/.test(gmCss) && /\.stone--white/.test(gmCss), '缺少棋子样式')
 }
 
 // ---------- 汇总 ----------

@@ -6,6 +6,7 @@
 import { join, resolve } from 'node:path'
 import { REPO_ROOT, loadConfig } from '../src/host/config.mjs'
 import { createGameService } from '../src/host/game.mjs'
+import { createGomokuService } from '../src/gomoku/service.mjs'
 import { createTunnelManager, pickLocalPort } from '../src/host/tunnel.mjs'
 import { startServer } from '../src/host/server.mjs'
 import { getRules } from '../src/rules/index.mjs'
@@ -58,6 +59,7 @@ const assetsDir = args.assetsDir
   : join(REPO_ROOT, 'web')
 
 const rules = getRules('xiangqi')
+const gomokuService = createGomokuService({ minutes: config.minutes })
 let server = null
 let tunnel = null
 const publicUrl = () => {
@@ -94,6 +96,7 @@ async function main() {
   })
   server = await startServer({
     service,
+    gomoku: gomokuService,
     tunnel,
     token: created.token,
     port,
@@ -101,7 +104,10 @@ async function main() {
     preview: args.preview,
     host: config.host,
   })
+  const gmCreated = gomokuService.newGame({ minutes: config.minutes })
+  if (typeof server.setGomokuToken === 'function') server.setGomokuToken(gmCreated.token)
   const invite = `${server.url}${created.urlPath}`
+  const gomokuInvite = `${server.url}${gmCreated.urlPath}`
 
   console.log('')
   console.log('  象棋对弈站点已启动')
@@ -110,6 +116,7 @@ async function main() {
   if (args.preview) console.log(`  预览地址（免口令）：${server.url}/`)
   console.log(`  静态目录：${assetsDir}`)
   console.log(`  对局编号：${created.snapshot.gameId} · 限时 ${config.minutes} 分钟 · 红先`)
+  console.log(`  五子棋：${gomokuInvite}`)
   console.log('  ────────────────────────────────')
   console.log('  Ctrl+C 退出')
   console.log('')
