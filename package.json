@@ -1,7 +1,7 @@
 {
   "name": "dsh-xiangqi",
   "version": "0.4.0",
-  "description": "DSH 象棋对弈插件：独立对弈网站 + agent 走子工具 + 一键内网穿透 + Markdown 记谱",
+  "description": "DSH 棋类对弈插件（中国象棋 / 五子棋 / 国际象棋）：独立对弈网站 + agent 走子工具 + 内网穿透 + Markdown 记谱",
   "type": "module",
   "main": "index.js",
   "exports": {
@@ -26,7 +26,8 @@
     "docs",
     "cordis.patch.yml",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    "CHANGELOG.md"
   ],
   "scripts": {
     "test": "node --test",
@@ -37,7 +38,9 @@
     "deepseek-harness",
     "dsh-plugin",
     "xiangqi",
-    "chess"
+    "gomoku",
+    "chess",
+    "board-game"
   ],
   "repository": {
     "type": "git",
