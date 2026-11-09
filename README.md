@@ -3,9 +3,19 @@
 > 在 DeepSeek Harness（DSH）里和 agent 下中国象棋 / 五子棋 / 国际象棋：插件在宿主进程里起独立对弈网站，人类用手机浏览器走子，agent 用工具应战，内网穿透把棋盘发到公网。
 
 - 形态：**独立网站**，不是 DSH 界面里的面板。插件启动 `node:http` 服务监听 `127.0.0.1:5000-5050` 的空闲端口，浏览器打开带口令的邀请链接即可对弈。
-- 对手：**本机 DSH 里的 agent**。agent 通过 `xiangqi_*` 工具走子、等待、导出记谱；人类只用浏览器。
+- 对手：**本机 DSH 里的 agent**。agent 通过 `xiangqi_*` / `gomoku_*` / `chess_*` 工具走子、等待、导出记谱；人类只用浏览器。
 - 对局：**单局制**。点「新局」即弃掉上一局，旧口令与旧记谱一并作废。
 - 依赖：**零第三方依赖**，只用 Node 内置模块与浏览器原生 API；前端无构建、无 CDN、无外链字体。
+
+## 支持的棋种
+
+| 棋种 | 页面 | 规则 | agent 工具 |
+| --- | --- | --- | --- |
+| 中国象棋 | `/?k=<token>` | 车马炮兵士象将、将军/将死/困毙、20 分钟 | `xiangqi_new_game` `xiangqi_board` `xiangqi_move` `xiangqi_wait` `xiangqi_record` |
+| 五子棋 | `/gomoku?k=<token>` | 15×15 无禁手、黑先、横竖斜 ≥5 连 | `gomoku_new_game` `gomoku_board` `gomoku_move` `gomoku_wait` `gomoku_record` |
+| 国际象棋 | `/chess?k=<token>` | 王车易位/吃过路兵/升变、将死/逼和/50 回合/子力不足、SAN | `chess_new_game` `chess_board` `chess_move` `chess_wait` `chess_record` |
+
+三者共用：18 位单局口令、20 分钟限时、长轮询动态刷新、自动唤醒 agent、Markdown 记谱、内网穿透（`xiangqi_tunnel`）、状态查看（`xiangqi_status`）。
 
 ## 特性
 
@@ -219,6 +229,10 @@ Get-NetTCPConnection -State Listen |
 - 落盘记谱与日志只写 `<token>` 占位；`GET /api/record.md` 与导出的 `.md` 都不含口令明文。
 - 对弈服务只监听本机回环地址；公网暴露完全由用户显式开启的隧道负责。
 - 本地配置 `xiangqi.config.json`、数据目录、`games/`、日志均在 `.gitignore` 内。
+
+## 变更日志
+
+见 [CHANGELOG.md](CHANGELOG.md)（0.1.0 → 0.4.0 的版本记录）。
 
 ## 开发
 

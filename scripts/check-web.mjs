@@ -24,7 +24,7 @@ const WEB_FILES = [
   'gomoku.html', 'gomoku.js', 'gomoku.css',
   'chess.html', 'chess.js', 'chess.css',
 ]
-const DOC_FILES = ['README.md', 'docs/USER-MANUAL.md']
+const DOC_FILES = ['README.md', 'CHANGELOG.md', 'docs/USER-MANUAL.md', 'docs/DESIGN.md']
 
 const MOUNT_IDS = [
   'board',

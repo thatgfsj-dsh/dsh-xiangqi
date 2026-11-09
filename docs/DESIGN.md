@@ -73,7 +73,7 @@ export function toFen(board)                 // 行压缩 FEN
 
 `src/gomoku/service.mjs` 提供与象棋对局服务同形状的接口（`newGame / snapshot / move / action / subscribe / verifyToken / recordMarkdown`），口令规则、20 分钟限时、单局制一致；`startServer({ gomoku })` 挂载 `/gomoku` 页面与 `/api/gomoku/*`（state / wait / move / new / action / record.md），复用同一套 `xq_sid` 会话 cookie 与隧道。
 
-## 4.2 国际象棋（0.4.0 新增，独立模块）
+## 3.1 国际象棋（0.4.0 新增，独立模块）
 
 `src/chess/rules.mjs`（纯函数，标准规则）：
 
@@ -270,6 +270,7 @@ export function createTunnelManager({ config, log = () => {} })
 4. 前端：真实浏览器打开移动端视口（390×844），确认首屏只有状态+棋盘+一排功能、棋谱在首屏下方；点选有拿起动画、落子有落位动画；走子后页面靠长轮询自更新（另一客户端走子 → 页面 ≤300ms 内变化）；截取首屏/拿起/棋谱与音效开关各一张图。
 5. DSH 冒烟：`dsh --profile web --patch <临时 overlay> --help` 能加载插件不报错（端口绑定在 `--help` 下不得阻塞退出）。
 6. 隧道：`cloudflared` 起 → 拿到 `https://*.trycloudflare.com` → 从本机 `curl` 该 URL 的 `/api/state` 通 → stop 后端口与子进程都消失。
+7. 附加棋种：`/gomoku`、`/chess` 页面可打开；`/api/gomoku/wait` 与 `/api/chess/wait` 长轮询可用；`gomoku_*` / `chess_*` 工具已注册（共 17 个）；国际象棋 perft(1/2/3) = 20/400/8902。
 
 ## 11. 脱敏红线（评审重点）
 
